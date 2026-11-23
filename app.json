@@ -10,6 +10,13 @@
     {
       "name": "g2-microphone",
       "desc": "Listen for a few seconds after you tap, to hear the other person introduce themselves. Audio is never stored."
+    },
+    {
+      "name": "network",
+      "desc": "Send the short audio clip to the Handshake backend for transcription and fit scoring.",
+      "whitelist": [
+        "http://localhost:8787"
+      ]
     }
   ],
   "supported_languages": [
