@@ -12,7 +12,8 @@
     "backend": "node --env-file-if-exists=backend/.env --watch backend/src/server.ts",
     "whisper": "whisper-server -m backend/models/ggml-base.en.bin --port 8178 -nt",
     "bench": "node backend/scripts/bench.ts",
-    "fixtures": "sh backend/scripts/make-fixtures.sh"
+    "fixtures": "sh backend/scripts/make-fixtures.sh",
+    "test:listen": "node scripts/test-listen.ts"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.16"

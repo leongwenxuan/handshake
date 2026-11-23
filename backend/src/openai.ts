@@ -37,10 +37,15 @@ ICP:
 ${icp}`
 }
 
-export function openaiScorer(apiKey: string, model = process.env.OPENAI_MODEL || 'gpt-4.1-mini'): Scorer {
+export function openaiScorer(
+  apiKey: string,
+  model = process.env.OPENAI_MODEL || 'gpt-5.4-mini',
+  // For reasoning models (gpt-5 family). Lowest effort keeps lookups fast.
+  reasoningEffort = process.env.OPENAI_REASONING_EFFORT || (model.startsWith('gpt-5') ? 'none' : undefined),
+): Scorer {
   const icpPath = new URL('../icp.md', import.meta.url)
   return {
-    name: `OpenAI ${model}`,
+    name: `OpenAI ${model}${reasoningEffort ? ` (${reasoningEffort})` : ''}`,
     async score(transcript) {
       // Re-read each time so edits to icp.md apply without a restart.
       const icp = readFileSync(icpPath, 'utf8')
@@ -54,6 +59,7 @@ export function openaiScorer(apiKey: string, model = process.env.OPENAI_MODEL ||
             { role: 'user', content: `Transcript: "${transcript}"` },
           ],
           response_format: { type: 'json_schema', json_schema: { name: 'card', strict: true, schema: CARD_SCHEMA } },
+          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
         }),
       })
       if (!res.ok) throw new Error(`OpenAI ${res.status}: ${await res.text()}`)

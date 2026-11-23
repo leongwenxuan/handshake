@@ -3,28 +3,44 @@
 // tap, or at a hard time limit.
 
 const CHUNK_MS = 100
-const END_SILENCE_MS = 800 // silence after speech that ends the capture
+const END_SILENCE_MS = 800 // quiet after speech that ends the capture
 const NO_SPEECH_MS = 5000 // give up if nobody speaks
 const MAX_MS = 8000
-const MIN_THRESHOLD = 0.02 // RMS floor so a quiet room doesn't count as speech
-const MIN_SPEECH_MS = 300 // loud audio needed before we treat it as speech, not a bump or cough
+const MIN_SPEECH_MS = 300 // loud audio needed before it counts as speech, not a bump or cough
+
+// Thresholds adapt to the room: speech must be clearly above the noise floor
+// to start, and only has to stay a little above it to continue, so short
+// pauses between words don't end the capture (hysteresis).
+const START_FACTOR = 4
+const CONTINUE_FACTOR = 2.5
+const MIN_START = 0.006 // absolute floors, for a near-silent room
+const MIN_CONTINUE = 0.004
+const FLOOR_CHUNKS = 5 // noise floor = quietest of the first few non-empty chunks
 
 export type StopReason = 'silence' | 'tap' | 'max' | 'no-speech'
 
 export class Capture {
   private chunks: Uint8Array[] = []
   private levels: number[] = []
+  private floorSamples: number[] = []
   private heardSpeech = false
   private silentMs = 0
   private loudMs = 0
   private stopped = false
+  private onStop: (reason: StopReason) => void
   readonly startedAt = performance.now()
   firstChunkAt: number | null = null
 
-  constructor(private onStop: (reason: StopReason) => void) {}
+  constructor(onStop: (reason: StopReason) => void) {
+    this.onStop = onStop
+  }
 
   get elapsedMs() {
     return this.chunks.length * CHUNK_MS
+  }
+
+  get noiseFloor() {
+    return this.floorSamples.length ? Math.min(...this.floorSamples) : 0
   }
 
   // Returns false once the capture has stopped.
@@ -34,16 +50,21 @@ export class Capture {
     this.chunks.push(pcm)
     const level = rms(pcm)
     this.levels.push(level)
+    // The mic's first chunks can be digital silence; don't let them set the floor.
+    if (level > 0 && this.floorSamples.length < FLOOR_CHUNKS) this.floorSamples.push(level)
 
-    // Noise floor from the quietest of the chunks so far; speech must clear it.
-    const floor = Math.min(...this.levels.slice(0, 5))
-    const threshold = Math.max(MIN_THRESHOLD, floor * 3)
+    const floor = this.noiseFloor
+    const start = Math.max(MIN_START, floor * START_FACTOR)
+    const keep = Math.max(MIN_CONTINUE, floor * CONTINUE_FACTOR)
 
-    if (level > threshold) {
-      this.loudMs += CHUNK_MS
-      if (this.loudMs >= MIN_SPEECH_MS) this.heardSpeech = true
+    if (!this.heardSpeech) {
+      if (level > start) {
+        this.loudMs += CHUNK_MS
+        if (this.loudMs >= MIN_SPEECH_MS) this.heardSpeech = true
+      }
+    } else if (level > keep) {
       this.silentMs = 0
-    } else if (this.heardSpeech) {
+    } else {
       this.silentMs += CHUNK_MS
     }
 
@@ -58,6 +79,11 @@ export class Capture {
     this.stopped = true
     this.onStop(reason)
     return false
+  }
+
+  // Per-chunk loudness, for tuning the thresholds.
+  get levelTrace(): string {
+    return this.levels.map(l => Math.round(l * 1000)).join(' ')
   }
 
   get speech() {

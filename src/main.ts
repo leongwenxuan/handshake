@@ -34,6 +34,7 @@ async function finishListening(capture: Capture, reason: StopReason) {
   await bridge.audioControl(false)
   const micDelay = capture.firstChunkAt === null ? null : Math.round(capture.firstChunkAt - capture.startedAt)
   console.log(`capture stopped: ${reason}, ${capture.elapsedMs} ms audio, first chunk after ${micDelay} ms`)
+  console.log(`levels (x1000): ${capture.levelTrace}`)
 
   if (!capture.speech) return goIdle("Didn't catch that.")
 
