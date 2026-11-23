@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { whisperLocal } from './stt.ts'
 import { mockScorer } from './score.ts'
+import { openaiScorer, openaiTranscriber } from './openai.ts'
 
 // POST /lookup with raw PCM (s16le, 16 kHz, mono) as the body.
 // Returns the card, the transcript and how long each step took.
@@ -9,8 +10,10 @@ import { mockScorer } from './score.ts'
 const PORT = Number(process.env.PORT ?? 8787)
 const MAX_BYTES = 16000 * 2 * 15 // 15 s of audio
 
-const transcriber = whisperLocal()
-const scorer = mockScorer()
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY?.trim()
+
+const transcriber = process.env.STT === 'openai' && OPENAI_API_KEY ? openaiTranscriber(OPENAI_API_KEY) : whisperLocal()
+const scorer = OPENAI_API_KEY ? openaiScorer(OPENAI_API_KEY) : mockScorer()
 
 function cors(res: ServerResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*')

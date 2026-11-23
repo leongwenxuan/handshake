@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "pack": "npm run build && evenhub pack app.json dist",
     "simulate": "evenhub-simulator http://localhost:5173 --automation-port 9898",
-    "backend": "node --watch backend/src/server.ts",
+    "backend": "node --env-file-if-exists=backend/.env --watch backend/src/server.ts",
     "whisper": "whisper-server -m backend/models/ggml-base.en.bin --port 8178 -nt",
     "bench": "node backend/scripts/bench.ts",
     "fixtures": "sh backend/scripts/make-fixtures.sh"
