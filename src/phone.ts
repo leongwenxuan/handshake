@@ -35,21 +35,29 @@ let active: Profile | null = null // the profile on screen
 const button = $<HTMLButtonElement>('build')
 const status = $<HTMLParagraphElement>('status')
 const section = $<HTMLElement>('profile')
-const current = $<HTMLDivElement>('current')
+const current = $<HTMLButtonElement>('current')
+const panel = $<HTMLDivElement>('setup-panel')
+const sheet = $<HTMLDialogElement>('sheet')
 
-// Once a profile exists, setup shrinks to one line so the leads come first.
+// Once a profile exists, setup moves into a sheet behind the company pill in
+// the top bar, so the people you met come first.
 function collapse(p: Profile) {
   active = p
-  $('current-name').textContent = p.company + (p.you ? ` as ${p.you}` : '')
-  $('current-domain').textContent = p.domain ?? ''
+  $('current-name').textContent = p.company
+  $('current-logo').innerHTML =
+    esc(p.company[0]?.toUpperCase() ?? '?') +
+    (p.domain ? `<img src="https://icons.duckduckgo.com/ip3/${encodeURIComponent(p.domain)}.ico" alt="" onerror="this.remove()">` : '')
   current.hidden = false
-  form.hidden = true
+  $('intro').hidden = true
+  button.textContent = 'Rebuild'
+  if (panel.parentElement !== $('sheet-body')) $('sheet-body').append(panel)
 }
 
-$('change').addEventListener('click', () => {
-  current.hidden = true
-  form.hidden = false
-  companyInput.focus()
+current.addEventListener('click', () => sheet.showModal())
+$('sheet-close').addEventListener('click', () => sheet.close())
+// Tapping the dimmed area outside the sheet closes it.
+sheet.addEventListener('click', e => {
+  if (e.target === sheet) sheet.close()
 })
 
 const KIND = { decision_maker: 'Decision maker', champion: 'Champion', user: 'User' }
@@ -80,7 +88,7 @@ function render(p: Profile) {
       ${p.buyers
         .map(
           b => `<div class="buyer card">
-            <div class="top"><span class="role">${esc(b.role)}</span><span class="kind">${KIND[b.kind]}</span></div>
+            <div class="head"><span class="role">${esc(b.role)}</span><span class="kind">${KIND[b.kind]}</span></div>
             <p class="why">${esc(b.why)}</p>
             <p class="titles">${b.titles.map(esc).join(' · ')}</p>
           </div>`,
@@ -90,7 +98,7 @@ function render(p: Profile) {
 
     <h2>Ideal companies</h2>
     <div class="chips">
-      ${[...p.icp.industries, p.icp.company_size, p.icp.stage, ...p.icp.regions].map(t => `<span class="chip">${esc(t)}</span>`).join('')}
+      ${[...p.icp.industries, p.icp.company_size, p.icp.stage, ...p.icp.regions].map(t => `<span>${esc(t)}</span>`).join('')}
     </div>
 
     <h2>Buying signals</h2>
@@ -101,12 +109,12 @@ function render(p: Profile) {
     ${
       p.competitors?.length
         ? `<h2>Competitors</h2>
-    <div class="chips">${p.competitors.map(c => `<span class="chip">${esc(c)}</span>`).join('')}</div>
+    <div class="chips">${p.competitors.map(c => `<span>${esc(c)}</span>`).join('')}</div>
     <p class="foot">People from these companies get a "Competitor" card instead of a pitch.</p>`
         : ''
     }
 
-    <p class="foot">The glasses use this for every introduction. Build again to change it.</p>`
+    <p class="foot">The glasses judge every introduction against this.${p.you ? ` Your own voice (${esc(p.you)}) is ignored.` : ''}</p>`
 }
 
 async function loadExisting() {

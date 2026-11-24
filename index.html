@@ -2,19 +2,50 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
     <title>Handshake</title>
     <style>
       :root {
-        /* ER brand dark-theme surface (#232323) + Neutral-200 text (#E5E5E5). */
-        --bg: #232323;
-        --surface: #2e2e2e;
-        --line: #3d3d3d;
-        --text: #e5e5e5;
-        --muted: #a3a3a3;
-        --accent: #7fe0a0;
-        --error: #ff8a80;
+        --bg: #f4f3ee;
+        --surface: #ffffff;
+        --sunk: #efeee8;
+        --line: #e4e2da;
+        --text: #1c1b18;
+        --muted: #8a877d;
+        --soft: #5d5a52;
+        --accent: #1f7a4d;
+        --accent-soft: #e3f1e8;
+        --amber: #b7791f;
+        --amber-soft: #f7ecd9;
+        --grey: #a19e94;
+        --error: #c0392b;
+        --pill: #1c1b18;
+        --pill-text: #f4f3ee;
+        --shadow: 0 1px 2px rgb(28 27 24 / 0.04), 0 4px 16px rgb(28 27 24 / 0.04);
+        --serif: ui-serif, 'New York', 'Iowan Old Style', Georgia, serif;
       }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #171715;
+          --surface: #222220;
+          --sunk: #1c1c1a;
+          --line: #33322e;
+          --text: #ecebe6;
+          --muted: #8f8c83;
+          --soft: #b5b2a8;
+          --accent: #6fd39a;
+          --accent-soft: #1f3a2b;
+          --amber: #e2b45f;
+          --amber-soft: #3a3020;
+          --grey: #77746c;
+          --error: #ff8a80;
+          --pill: #ecebe6;
+          --pill-text: #171715;
+          --shadow: none;
+        }
+      }
+      * { box-sizing: border-box; }
       html, body {
         margin: 0;
         min-height: 100%;
@@ -25,138 +56,269 @@
         touch-action: manipulation;
         -webkit-text-size-adjust: 100%;
         overscroll-behavior: none;
+        -webkit-tap-highlight-color: transparent;
       }
-      main { max-width: 560px; margin: 0 auto; padding: 24px 16px 48px; box-sizing: border-box; }
-      h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
-      h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 24px 0 8px; font-weight: 600; }
       p { margin: 0; }
-      .sub { color: var(--muted); margin-top: 4px; }
-      form { margin-top: 20px; display: grid; gap: 8px; }
-      label { font-size: 13px; color: var(--muted); }
-      .row { display: flex; gap: 8px; }
-      input {
-        flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--surface);
-        border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px;
-      }
-      input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-      button {
-        font: inherit; font-weight: 600; color: #111; background: var(--accent);
-        border: 0; border-radius: 10px; padding: 0 18px; cursor: pointer;
-      }
+      button { font: inherit; color: inherit; cursor: pointer; }
       button:disabled { opacity: 0.5; cursor: default; }
-      #status { margin-top: 12px; min-height: 1.45em; color: var(--muted); }
+      a { color: inherit; }
+
+      /* --- top bar --------------------------------------------------- */
+      .top {
+        position: sticky; top: 0; z-index: 5;
+        display: flex; justify-content: space-between; align-items: center; gap: 12px;
+        padding: calc(12px + env(safe-area-inset-top)) 16px 12px;
+        background: color-mix(in srgb, var(--bg) 88%, transparent);
+        backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      }
+      .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; letter-spacing: -0.01em; }
+      .brand svg { color: var(--accent); }
+      .company-pill {
+        display: flex; align-items: center; gap: 8px; min-width: 0;
+        background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
+        padding: 4px 10px 4px 4px; font-size: 14px; font-weight: 600; box-shadow: var(--shadow);
+      }
+      .company-pill[hidden] { display: none; }
+      .company-pill .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+      .company-pill svg { color: var(--muted); flex: none; }
+
+      main { max-width: 560px; margin: 0 auto; padding: 8px 16px calc(120px + env(safe-area-inset-bottom)); }
+      h1 { font: 400 34px/1.1 var(--serif); letter-spacing: -0.02em; margin: 12px 0 0; }
+      .stats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+      .stat { font-size: 13px; color: var(--soft); background: var(--sunk); border-radius: 999px; padding: 3px 10px; }
+      .stat b { color: var(--text); font-weight: 650; }
+      .stat.good b { color: var(--accent); }
+      .label { font-size: 13px; color: var(--muted); margin: 24px 4px 8px; }
+
+      /* --- lead rows ------------------------------------------------- */
+      .list { display: grid; gap: 8px; }
+      .lead { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); overflow: hidden; }
+      .lead.new { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+      .row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 12px 12px 12px; background: none; border: 0; text-align: left; }
+      .row .text { flex: 1; min-width: 0; }
+      .row .who, .row .why, .row .intro { display: block; }
+      .row .who { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .row .who .at { font-weight: 400; color: var(--muted); }
+      .row .why { font-size: 13px; color: var(--soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+      .row .intro { font-size: 13px; color: var(--accent); font-weight: 600; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .logo {
+        position: relative; flex: none; width: 40px; height: 40px; border-radius: 11px;
+        background: var(--sunk); color: var(--muted); display: grid; place-items: center;
+        font-weight: 700; font-size: 16px; overflow: hidden; border: 1px solid var(--line);
+      }
+      .logo.sm { width: 26px; height: 26px; border-radius: 999px; font-size: 12px; }
+      .logo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #fff; padding: 5px; }
+      .logo.sm img { padding: 3px; }
+      .ring { flex: none; display: grid; place-items: center; width: 40px; height: 40px; position: relative; }
+      .ring svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+      .ring .track { stroke: var(--line); }
+      .ring .fill { stroke: var(--grey); stroke-linecap: round; }
+      .ring b { font-size: 13px; font-weight: 700; color: var(--soft); }
+      .strong .ring .fill { stroke: var(--accent); }
+      .strong .ring b { color: var(--accent); }
+      .maybe .ring .fill { stroke: var(--amber); }
+      .maybe .ring b { color: var(--amber); }
+
+      .detail { padding: 0 14px 14px; display: none; }
+      .lead.open .detail { display: block; }
+      .lead.open .row .why { white-space: normal; }
+      .lead.open .row .intro { display: none; }
+      .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+      .tag { font-size: 12px; font-weight: 600; border-radius: 999px; padding: 3px 9px; background: var(--sunk); color: var(--soft); }
+      .tag.ok { background: var(--accent-soft); color: var(--accent); }
+      .strong .tag.verdict { background: var(--accent-soft); color: var(--accent); }
+      .maybe .tag.verdict { background: var(--amber-soft); color: var(--amber); }
+      .block { margin-top: 12px; border-radius: 12px; background: var(--sunk); padding: 12px; }
+      .block h3 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
+      .block .ask { font-weight: 650; }
+      .block .ask small { display: block; font-weight: 400; color: var(--soft); font-size: 13px; }
+      .pick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+      .chip {
+        background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+        padding: 6px 10px; text-align: left; line-height: 1.25; font-size: 13px; font-weight: 600;
+      }
+      .chip small { display: block; font-weight: 400; color: var(--muted); }
+      .chip.none { color: var(--muted); }
+      .chip.busy { border-color: var(--accent); }
+      .mail .subject { font-weight: 650; }
+      .mail pre { margin: 8px 0 0; white-space: pre-wrap; font: inherit; font-size: 14px; color: var(--soft); overflow-wrap: anywhere; }
+      .quote { font: italic 15px/1.45 var(--serif); color: var(--soft); }
+      .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+      .btn {
+        display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600;
+        padding: 8px 14px; border-radius: 999px; text-decoration: none;
+        color: var(--text); background: var(--surface); border: 1px solid var(--line);
+      }
+      .btn.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+      .meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 12px; font-size: 12px; color: var(--muted); }
+      .meta a { color: var(--muted); font-weight: 600; text-decoration: none; }
+
+      .empty { margin-top: 20px; text-align: center; padding: 32px 20px; border: 1px dashed var(--line); border-radius: 16px; color: var(--muted); }
+      .empty svg { color: var(--accent); margin-bottom: 8px; }
+      .empty strong { display: block; color: var(--text); font-weight: 600; margin-bottom: 4px; }
+
+      /* --- setup (inline before the first profile, a sheet after) ---- */
+      main:has(> #setup-panel) > #leads { display: none; } /* first run: setup alone */
+      .setup h1 { margin-top: 28px; }
+      .setup .sub { color: var(--soft); margin-top: 8px; }
+      form { margin-top: 20px; display: grid; gap: 14px; }
+      form[hidden] { display: none; }
+      .field { display: grid; gap: 6px; }
+      .field label { font-size: 13px; color: var(--muted); }
+      input {
+        width: 100%; font: inherit; font-size: 16px; color: var(--text); background: var(--surface);
+        border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
+      }
+      input::placeholder { color: var(--grey); }
+      input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+      .build {
+        font-weight: 650; font-size: 16px; color: var(--bg); background: var(--text);
+        border: 0; border-radius: 999px; padding: 14px 18px;
+      }
+      #status { margin-top: 12px; color: var(--soft); font-size: 14px; }
       #status.error { color: var(--error); }
       #status:empty { display: none; }
-      .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
-      .company { margin-top: 24px; }
-      .company .name { font-size: 18px; font-weight: 650; }
-      .company .domain { color: var(--muted); font-weight: 400; font-size: 14px; margin-left: 6px; }
-      .company .one { margin-top: 4px; }
-      dl { margin: 12px 0 0; display: grid; gap: 8px; }
-      dt { font-size: 12px; color: var(--muted); }
-      dd { margin: 0; }
-      .buyers { display: grid; gap: 8px; }
-      .buyer .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-      .buyer .role { font-weight: 650; }
-      .kind { font-size: 12px; color: var(--accent); white-space: nowrap; }
-      .buyer .why { margin-top: 4px; }
-      .buyer .titles { margin-top: 6px; color: var(--muted); font-size: 13px; }
-      .chips { display: flex; flex-wrap: wrap; gap: 6px; }
-      .chip { background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; font-size: 13px; }
-      ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
-      .summary { color: var(--muted); margin-bottom: 10px; }
-      .leads { display: grid; gap: 8px; }
-      .lead { border-left: 3px solid var(--line); }
-      .lead.fit-strong { border-left-color: var(--accent); }
-      .lead.fit-maybe { border-left-color: #e0c97f; }
-      .lead .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-      .lead .who { font-weight: 650; }
-      .lead .at { color: var(--muted); margin-left: 6px; }
-      .badge { font-size: 12px; white-space: nowrap; color: var(--muted); }
-      .fit-strong .badge { color: var(--accent); }
-      .fit-maybe .badge { color: #e0c97f; }
-      .lead .facts { margin-top: 4px; font-size: 13px; color: var(--muted); }
-      .lead .facts .ok { color: var(--text); }
-      .lead .why { margin-top: 6px; }
-      .lead .ask { margin-top: 6px; color: var(--accent); }
-      .pick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; font-size: 13px; color: var(--muted); }
-      .pick .chip {
-        font: inherit; font-weight: 600; color: var(--text); background: transparent; border: 1px solid var(--line);
-        border-radius: 8px; padding: 5px 10px; text-align: left; line-height: 1.25;
-      }
-      .pick .chip small { display: block; font-weight: 400; color: var(--muted); }
-      .pick .chip.none { color: var(--muted); }
-      .pick .chip.busy { border-color: var(--accent); }
-      details { margin-top: 10px; }
-      summary { cursor: pointer; color: var(--muted); font-size: 13px; }
-      .subject { margin-top: 8px; font-weight: 600; }
-      pre { margin: 6px 0 0; white-space: pre-wrap; font: inherit; overflow-wrap: anywhere; }
-      .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-      .actions button, .btn {
-        font: inherit; font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 8px;
-        color: var(--text); background: transparent; border: 1px solid var(--line); text-decoration: none;
-      }
-      .current { margin-top: 20px; display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 12px 10px 14px; }
-      .current .domain { color: var(--muted); margin-left: 6px; }
-      button.ghost { color: var(--text); background: transparent; border: 1px solid var(--line); padding: 6px 12px; font-size: 13px; }
-      form[hidden] { display: none; }
-      .lead.new { outline: 2px solid var(--accent); outline-offset: -1px; }
-      .lead .meta { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 12px; color: var(--muted); }
-      .lead .meta a { color: var(--accent); text-decoration: none; font-weight: 600; }
-      .steps { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; }
+      .steps { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 10px; }
+      .steps[hidden] { display: none; }
       .steps li { display: flex; gap: 10px; align-items: baseline; color: var(--muted); }
-      .steps li::before { content: ''; flex: none; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--line); transform: translateY(-1px); }
+      .steps li::before { content: ''; flex: none; width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--line); transform: translateY(-1px); }
       .steps li.active { color: var(--text); }
       .steps li.active::before { border-color: var(--accent); animation: pulse 1s ease-in-out infinite; }
       .steps li.done { color: var(--text); }
       .steps li.done::before { background: var(--accent); border-color: var(--accent); }
       .steps li.miss::before { border-color: var(--muted); }
       .steps .detail { color: var(--muted); font-size: 13px; }
+
+      dialog {
+        width: 100%; max-width: 560px; max-height: 92vh; margin: auto auto 0; padding: 0;
+        border: 0; border-radius: 20px 20px 0 0; background: var(--bg); color: var(--text);
+      }
+      dialog::backdrop { background: rgb(0 0 0 / 0.35); }
+      dialog[open] { animation: up 0.22s ease-out; }
+      .sheet-head {
+        position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: center;
+        padding: 14px 16px; background: var(--bg); border-bottom: 1px solid var(--line);
+      }
+      .sheet-head strong { font-size: 16px; }
+      .sheet-head button { background: var(--sunk); border: 0; border-radius: 999px; padding: 6px 12px; font-weight: 600; font-size: 14px; }
+      .sheet-body { padding: 4px 16px calc(24px + env(safe-area-inset-bottom)); }
+      /* In the sheet: what the glasses judge against first, then the form to change it. */
+      .sheet-body .setup { display: flex; flex-direction: column; }
+      .sheet-body #profile { order: -1; margin-top: 12px; }
+      .sheet-body form { margin-top: 28px; }
+      .sheet-body form::before { content: 'Change company or name'; font-size: 13px; color: var(--muted); margin: 0 4px -6px; }
+
+      .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 14px; box-shadow: var(--shadow); }
+      #profile h2 { font-size: 13px; font-weight: 500; color: var(--muted); margin: 22px 4px 8px; }
+      .company .name { font: 400 24px/1.2 var(--serif); }
+      .company .domain { color: var(--muted); font: 14px system-ui, sans-serif; margin-left: 6px; }
+      .company .one { margin-top: 6px; color: var(--soft); }
+      dl { margin: 12px 0 0; display: grid; gap: 10px; }
+      dt { font-size: 12px; color: var(--muted); }
+      dd { margin: 0; }
+      .buyers { display: grid; gap: 8px; }
+      .buyer .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+      .buyer .role { font-weight: 650; }
+      .kind { font-size: 12px; color: var(--accent); white-space: nowrap; font-weight: 600; }
+      .buyer .why { margin-top: 4px; color: var(--soft); }
+      .buyer .titles { margin-top: 6px; color: var(--muted); font-size: 13px; }
+      .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+      .chips span { background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; font-size: 13px; }
+      #profile ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; color: var(--soft); }
+      .foot { margin-top: 16px; color: var(--muted); font-size: 13px; }
+
+      /* --- live pill: what the glasses are doing ---------------------- */
+      .live {
+        position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+        z-index: 6; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 32px);
+        background: var(--pill); color: var(--pill-text); border-radius: 999px; padding: 12px 18px;
+        font-size: 14px; font-weight: 600; box-shadow: 0 8px 24px rgb(0 0 0 / 0.18);
+      }
+      .live[hidden] { display: none; }
+      .live .msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .live .dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #6fd39a; }
+      .live.busy .dot { animation: pulse 1s ease-in-out infinite; }
+      .live.error .dot { background: #ff8a80; }
+      .live .time { font-variant-numeric: tabular-nums; opacity: 0.7; }
+      .bars { display: none; align-items: center; gap: 2px; height: 14px; }
+      .live.listening .bars { display: flex; }
+      .live.listening .dot { display: none; }
+      .bars i { width: 3px; border-radius: 2px; background: #6fd39a; animation: bar 0.9s ease-in-out infinite; }
+      .bars i:nth-child(1) { height: 6px; }
+      .bars i:nth-child(2) { height: 12px; animation-delay: 0.15s; }
+      .bars i:nth-child(3) { height: 9px; animation-delay: 0.3s; }
+      .bars i:nth-child(4) { height: 13px; animation-delay: 0.45s; }
+
       @keyframes pulse { 50% { opacity: 0.3; } }
-      @media (prefers-reduced-motion: reduce) { .steps li.active::before { animation: none; } }
-      .lead .top { align-items: center; }
-      .ident { display: flex; align-items: center; gap: 10px; min-width: 0; }
-      .logo { position: relative; flex: none; width: 32px; height: 32px; border-radius: 8px; background: var(--line); color: var(--muted); display: grid; place-items: center; font-weight: 700; font-size: 14px; overflow: hidden; }
-      .logo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #fff; padding: 4px; box-sizing: border-box; }
-      .score { display: grid; justify-items: end; gap: 4px; flex: none; }
-      .bar { width: 64px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
-      .bar span { display: block; height: 100%; background: var(--muted); }
-      .fit-strong .bar span { background: var(--accent); }
-      .fit-maybe .bar span { background: #e0c97f; }
-      .lead.other { border-left-color: #8a8a8a; }
-      .empty { color: var(--muted); }
-      .foot { margin-top: 24px; color: var(--muted); font-size: 13px; }
+      @keyframes bar { 50% { transform: scaleY(0.4); } }
+      @keyframes up { from { transform: translateY(24px); opacity: 0; } }
+      @media (prefers-reduced-motion: reduce) {
+        .steps li.active::before, .live .dot, .bars i { animation: none !important; }
+        dialog[open] { animation: none; }
+      }
     </style>
   </head>
   <body>
-    <main>
-      <h1>Handshake</h1>
-      <p class="sub">Tell it what you sell. It works out who to talk to, then checks everyone you meet against that.</p>
-
-      <div id="current" class="current card" hidden>
-        <span>Scoring for <strong id="current-name"></strong><span id="current-domain" class="domain"></span></span>
-        <button id="change" type="button" class="ghost">Change</button>
+    <header class="top">
+      <div class="brand">
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5" fill="none" stroke="currentColor" stroke-width="2.5" stroke-dasharray="36 48" stroke-linecap="round" transform="rotate(-90 10 10)"/></svg>
+        Handshake
       </div>
+      <button id="current" class="company-pill" type="button" hidden aria-label="Your company and setup">
+        <span id="current-logo" class="logo sm" aria-hidden="true"></span>
+        <span id="current-name" class="name"></span>
+        <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </header>
 
-      <form id="setup">
-        <label for="you">Your name</label>
-        <input id="you" placeholder="So it ignores your own voice" autocomplete="given-name" />
-        <label for="company">Your company</label>
-        <div class="row">
-          <input id="company" placeholder="yourcompany.com" autocomplete="off" autocapitalize="off" spellcheck="false" />
-          <button id="build" type="submit">Build</button>
-        </div>
-        <label for="note">Focus (optional)</label>
-        <input id="note" placeholder="e.g. Southeast Asia, mid-market" autocomplete="off" />
-      </form>
-      <ol id="progress" class="steps" hidden></ol>
-      <p id="status" role="status"></p>
-
+    <main>
       <section id="leads" hidden></section>
-      <section id="profile" hidden></section>
+
+      <!-- Setup: shown here until a profile exists, then moved into the sheet. -->
+      <div id="setup-panel" class="setup">
+        <div id="intro">
+          <h1>What do you sell?</h1>
+          <p class="sub">Handshake works out who buys it, then checks everyone you meet against that, on your glasses.</p>
+        </div>
+        <form id="setup">
+          <div class="field">
+            <label for="company">Your company</label>
+            <input id="company" placeholder="yourcompany.com" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label for="you">Your first name</label>
+            <input id="you" placeholder="So it ignores your own voice" autocomplete="given-name" />
+          </div>
+          <div class="field">
+            <label for="note">Focus (optional)</label>
+            <input id="note" placeholder="e.g. Southeast Asia, mid-market" autocomplete="off" />
+          </div>
+          <button id="build" class="build" type="submit">Build my profile</button>
+        </form>
+        <ol id="progress" class="steps" hidden></ol>
+        <p id="status" role="status"></p>
+        <section id="profile" hidden></section>
+      </div>
     </main>
+
+    <dialog id="sheet" aria-labelledby="sheet-title">
+      <div class="sheet-head">
+        <strong id="sheet-title">Your company</strong>
+        <button id="sheet-close" type="button">Done</button>
+      </div>
+      <div id="sheet-body" class="sheet-body"></div>
+    </dialog>
+
+    <div id="live" class="live" role="status" aria-live="polite" hidden>
+      <span class="dot"></span>
+      <span class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span class="msg"></span>
+      <span class="time"></span>
+    </div>
+
     <script type="module" src="/src/phone.ts"></script>
     <script type="module" src="/src/recap.ts"></script>
+    <script type="module" src="/src/live.ts"></script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

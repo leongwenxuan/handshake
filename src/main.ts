@@ -1,7 +1,8 @@
 import { waitForEvenAppBridge, OsEventTypeList } from '@evenrealities/even_hub_sdk'
 import { actionsFor, showCard, showText, updateCard, updateCardText } from './glasses'
 import { Capture, type StopReason } from './listen'
-import { BACKEND_URL, lookup, saveLead as saveToBackend, verify, withContact, type Check, type LookupResult } from './api'
+import { announce } from './live'
+import { BACKEND_URL, cardParts, lookup, saveLead as saveToBackend, verify, withContact, type Check, type LookupResult } from './api'
 
 // Flow: idle --tap--> listening --silence/tap--> thinking --> card --Save/Skip--> idle
 // If the lookup fails, the clip is kept: tap retries it without asking again.
@@ -31,6 +32,7 @@ const idleText = (message?: string) => (message ? `${message}\n\n${HINT}` : `Han
 async function goIdle(message?: string) {
   if (FIXTURE && state.kind === 'card') void bridge.audioControl(false)
   state = { kind: 'idle' }
+  announce({ kind: 'idle', text: message ?? 'Glasses ready' })
   await showText(bridge, idleText(message))
 }
 
@@ -41,6 +43,7 @@ const FIXTURE = import.meta.env.DEV ? new URLSearchParams(location.search).get('
 async function startListening() {
   const capture = new Capture(reason => void finishListening(capture, reason))
   state = { kind: 'listening', capture }
+  announce({ kind: 'listening' })
   await showText(bridge, 'Listening...\n\nStops when they pause.\nTap to finish now. Double-tap to cancel.')
   // The capture's own limits count audio chunks; this covers a mic that
   // never starts sending them.
@@ -86,6 +89,7 @@ async function finishListening(capture: Capture, reason: StopReason) {
 async function checkFit(audio: Uint8Array<ArrayBuffer>) {
   const thinking: State = { kind: 'thinking' }
   state = thinking
+  announce({ kind: 'busy', text: 'Checking fit...' })
   await showText(bridge, 'Checking fit...')
   const t0 = performance.now()
   try {
@@ -99,6 +103,7 @@ async function checkFit(audio: Uint8Array<ArrayBuffer>) {
     const check: Check = checkable ? 'pending' : 'off'
     const shown: CardState = { kind: 'card', result, check, roleCheck: null, saving: false }
     state = shown
+    showLive(shown)
     // Start the role check before Save can be tapped, so any Save waits for it.
     const rendered = showCard(bridge, result.card, check)
     if (check === 'pending') shown.roleCheck = checkRole(shown, t0, rendered)
@@ -111,6 +116,7 @@ async function checkFit(audio: Uint8Array<ArrayBuffer>) {
     console.error('lookup failed:', err)
     if (state !== thinking) return
     state = { kind: 'failed', audio }
+    announce({ kind: 'error', text: "Couldn't check fit. Tap the ring to retry." })
     await showText(bridge, "Couldn't check fit.\n\nTap to try again (no need to ask them).\nDouble-tap to skip.")
   }
 }
@@ -136,6 +142,7 @@ async function checkRole(shown: CardState, t0: number, rendered: Promise<void>):
   shown.check = check
   if (state === shown) {
     // Several buyers found: rebuild once to add "Other buyer".
+    showLive(shown)
     if (actionsFor(check) !== before) await showCard(bridge, card, check)
     else await updateCard(bridge, card, check)
   }
@@ -151,7 +158,14 @@ async function nextBuyer(shown: CardState) {
   const next = withContact(shown.result.card, check, check.contacts[(i + 1) % check.contacts.length])
   shown.result = { ...shown.result, card: next.card }
   shown.check = next.check
+  showLive(shown)
   await updateCard(bridge, next.card, next.check)
+}
+
+// The card's first two lines, mirrored on the phone's live pill.
+function showLive(shown: CardState) {
+  const [who, verdict] = cardParts(shown.result.card, shown.check).header.split('\n')
+  announce({ kind: 'card', text: `${who} · ${verdict}` })
 }
 
 // Saves on the glasses first, so a lead is never lost, then sends it to the
@@ -170,6 +184,7 @@ async function saveLead(shown: CardState) {
 
   const who = result.card.name ?? 'lead'
   await goIdle(`Saved ${who}. Syncing...`)
+  announce({ kind: 'busy', text: `Saving ${who} to Notion...` })
   const idle = state
   if (FIXTURE) await bridge.audioControl(true) // keep the simulator awake (see above)
   let line = `Saved ${who}.`
@@ -192,7 +207,10 @@ async function saveLead(shown: CardState) {
     line = `Saved ${who} on glasses. Sync unconfirmed.`
   }
   if (FIXTURE) await bridge.audioControl(false)
-  if (state === idle) await updateCardText(bridge, idleText(line))
+  if (state === idle) {
+    announce({ kind: 'idle', text: line.replace('\n', ' ') })
+    await updateCardText(bridge, idleText(line))
+  }
 }
 
 // Swaps the glasses' copy of a lead for its role-checked version.
