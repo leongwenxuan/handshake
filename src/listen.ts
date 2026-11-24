@@ -5,7 +5,7 @@
 const CHUNK_MS = 100
 const END_SILENCE_MS = 800 // quiet after speech that ends the capture
 const NO_SPEECH_MS = 5000 // give up if nobody speaks
-const MAX_MS = 8000
+const MAX_MS = 12000 // long intros (name, role, company, what they do) run 7-9 s
 const MIN_SPEECH_MS = 300 // loud audio needed before it counts as speech, not a bump or cough
 
 // Thresholds adapt to the room: speech must be clearly above the noise floor
