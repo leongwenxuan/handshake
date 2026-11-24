@@ -31,6 +31,10 @@ Real glasses: `npx evenhub qr --url http://<your-ip>:5173` and scan with the Eve
 
 Package: `npm run pack` produces an `.ehpk`.
 
+## Repeatable simulator runs
+
+`npm run dev` serves a dev-only fixture mode: open the simulator at `http://localhost:5173/?fixture=sarah-stripe` and a tap plays `backend/fixtures/sarah-stripe.wav` through the same capture and lookup as the mic.
+
 ## Latency check
 
 `npm run fixtures` generates sample introductions (clean and with background noise) in `backend/fixtures/`. `npm run bench` sends each one to the backend and prints the transcript, the card and the time per step. Add your own 16 kHz mono WAV recordings there for more honest numbers.
@@ -40,6 +44,10 @@ Package: `npm run pack` produces an `.ehpk`.
 **Setup (phone):** company name or website → Treg looks up the company (domain, industry, size) while the backend reads the homepage → OpenAI turns that into a profile: problem, solution, ideal customer companies, three buyer roles with real job titles, and who is not a fit. About 5-6 s.
 
 **At the event (glasses):** tap → the glasses mic records until the person stops talking (or you tap again) → the clip goes to the backend → Whisper transcribes it → OpenAI judges the transcript against the profile and returns a card → the glasses show the card with **Save lead** / **Skip**. Double-tap goes back, or exits from the home screen. Audio stays in memory for the request and is never stored.
+
+**Role check (second pass, about 2-4 s later):** with a Treg token, the backend looks up the company (by the domain the scorer is confident about, or an exact name match), searches its people by the name and role heard, and fuzzy-matches the name ("Kari Saarinen" heard, "Karri Saarinen" found). A database title is only shown as **Verified** when it fits what the person said, so a different person with the same name is ignored. If they aren't a buyer but their company fits, it finds who holds the main buyer role there ("Buyer there: Reema Doshi (RevOps lead)", "Ask: Could you intro me to Reema?"). The scorer then runs again with these facts, keeping its first verdict unless they give a reason to change it, and the glasses update the card in place.
+
+Speech-to-text defaults to OpenAI `gpt-4o-transcribe` because it gets names right far more often than local Whisper base, and the role check depends on the name. Set `STT=whisper` for the free, offline path.
 
 Without an OpenAI key the scorer is a placeholder that only pulls out the name and company.
 

@@ -36,11 +36,21 @@ export async function chatJSON<T>(
 const CARD_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['name', 'company', 'role', 'buyer', 'fit', 'score', 'why', 'opener'],
+  required: ['name', 'company', 'company_domain', 'role', 'checked_title', 'company_fit', 'buyer', 'fit', 'score', 'why', 'opener'],
   properties: {
     name: { type: ['string', 'null'], description: "The other person's name as they said it, or null" },
     company: { type: ['string', 'null'], description: 'Their company, or null' },
-    role: { type: ['string', 'null'], description: 'Their role in a few words, or null' },
+    company_domain: {
+      type: ['string', 'null'],
+      description: "The company's main website domain (e.g. stripe.com) only if you are confident which company it is; otherwise null",
+    },
+    role: { type: ['string', 'null'], description: 'Their role in a few words, as they described it, or null' },
+    checked_title: {
+      type: ['string', 'null'],
+      description:
+        'Only when checked facts are given: their job title from the facts, if it is consistent with what they said about their role. Null if it conflicts (it may be a different person with the same name) or there are no facts',
+    },
+    company_fit: { type: 'string', enum: ['yes', 'no', 'unknown'], description: 'Does their company look like an ideal customer company?' },
     buyer: {
       type: ['string', 'null'],
       description: 'The buyer role label from the profile that this person matches, exactly as written there, or null',
@@ -66,7 +76,8 @@ Rules:
 - Use fit "unknown" and score null only when you cannot tell their role and have no idea what their company does. Then the opener is a qualifying question that would settle it.
 - Fix an obvious mishearing of a famous company name (for example "Stride" said in a fintech context is probably "Stripe") only when you are confident. Keep personal names as heard.
 - If no name or company was said, return nulls for them and fit "unknown".
-- "why" is at most 45 characters. "opener" starts with "Ask: " and is at most 60 characters, specific to them and to what the wearer sells.
+- Checked facts, when given, come from a business database looked up by the name and company you heard. Trust them for company size and industry. A person row may be someone else with the same name: use their title only if it fits what they said (a "Cofounder" title fits "one of the founders"; "Software Engineer" does not fit "I run partnerships"). If it conflicts, ignore that row and trust what they said.
+- "why" is at most 45 characters, in whole words: shorten the phrase rather than cutting a word off. "opener" starts with "Ask: " and is at most 60 characters, specific to them and to what the wearer sells.
 
 ${profile}`
 }
@@ -75,11 +86,11 @@ ${profile}`
 export function openaiScorer(apiKey: string, profile: () => string, model = DEFAULT_MODEL): Scorer {
   return {
     name: `OpenAI ${model}`,
-    score: transcript =>
+    score: (transcript, facts) =>
       chatJSON<Card>(apiKey, {
         model,
         system: instructions(profile()),
-        user: `Transcript: "${transcript}"`,
+        user: `Transcript: "${transcript}"${facts ? `\n\n${facts}` : ''}`,
         schemaName: 'card',
         schema: CARD_SCHEMA,
         reasoningEffort: process.env.OPENAI_REASONING_EFFORT || undefined,
@@ -87,7 +98,7 @@ export function openaiScorer(apiKey: string, profile: () => string, model = DEFA
   }
 }
 
-export function openaiTranscriber(apiKey: string, model = process.env.OPENAI_STT_MODEL || 'gpt-4o-mini-transcribe'): Transcriber {
+export function openaiTranscriber(apiKey: string, model = process.env.OPENAI_STT_MODEL || 'gpt-4o-transcribe'): Transcriber {
   return {
     name: `OpenAI ${model}`,
     async transcribe(pcm) {

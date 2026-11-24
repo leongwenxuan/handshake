@@ -5,6 +5,7 @@ import {
   ListItemContainerProperty,
   RebuildPageContainer,
   TextContainerProperty,
+  TextContainerUpgrade,
 } from '@evenrealities/even_hub_sdk'
 
 // Two page layouts on the 576x288 display:
@@ -47,6 +48,13 @@ async function show(bridge: EvenAppBridge, page: { textObject: TextContainerProp
 
 export function showText(bridge: EvenAppBridge, content: string) {
   return show(bridge, { textObject: [textContainer(content, 288, true)] })
+}
+
+// Replaces the card text in place, without rebuilding the page, so the
+// Save / Skip selection stays where it is.
+export async function updateCardText(bridge: EvenAppBridge, content: string) {
+  const ok = await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: TEXT_ID, containerName: 'main', content }))
+  if (!ok) console.error('textContainerUpgrade failed')
 }
 
 export function showCard(bridge: EvenAppBridge, content: string) {

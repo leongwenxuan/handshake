@@ -1,12 +1,17 @@
+import { existsSync, readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { whisperLocal } from './stt.ts'
 import { mockScorer } from './score.ts'
 import { openaiScorer, openaiTranscriber } from './openai.ts'
 import { buildProfile, loadProfile, profileText, saveProfile, type Profile } from './profile.ts'
 import { treg as makeTreg } from './treg.ts'
+import { factsText, verify } from './verify.ts'
+import type { Card } from './score.ts'
 
 // POST /lookup with raw PCM (s16le, 16 kHz, mono) as the body.
 // Returns the card, the transcript and how long each step took.
+// POST /verify {transcript, card}: checks the person's work role through
+// Treg and rescores with what it found (second, slower pass).
 // GET /profile, POST /profile {company, note?}: the wearer's company profile
 // (ideal customers and buyer roles) that every card is judged against.
 // Audio is only held in memory for the request and never written to disk.
@@ -19,7 +24,9 @@ const TREG_API_KEY = process.env.TREG_API_KEY?.trim()
 
 let profile: Profile | null = loadProfile()
 const treg = TREG_API_KEY ? makeTreg(TREG_API_KEY) : null
-const transcriber = process.env.STT === 'openai' && OPENAI_API_KEY ? openaiTranscriber(OPENAI_API_KEY) : whisperLocal()
+// OpenAI transcription hears names far better than local Whisper base
+// ("Patrick Collison" vs "Patrick Carlson"), which the role check depends on.
+const transcriber = process.env.STT !== 'whisper' && OPENAI_API_KEY ? openaiTranscriber(OPENAI_API_KEY) : whisperLocal()
 const scorer = OPENAI_API_KEY ? openaiScorer(OPENAI_API_KEY, () => profileText(profile)) : mockScorer()
 
 function cors(res: ServerResponse) {
@@ -50,6 +57,15 @@ const server = createServer(async (req, res) => {
 
   if (req.method === 'GET' && req.url === '/health') {
     return json(res, 200, { ok: true, stt: transcriber.name, scorer: scorer.name, treg: !!treg, profile: profile?.company ?? null })
+  }
+
+  // Test recordings, for the app's ?fixture= dev mode.
+  const fixture = req.method === 'GET' && /^\/fixtures\/([a-z0-9-]+)\.wav$/.exec(req.url ?? '')
+  if (fixture) {
+    const file = new URL(`../fixtures/${fixture[1]}.wav`, import.meta.url)
+    if (!existsSync(file)) return json(res, 404, { error: 'no such fixture' })
+    res.writeHead(200, { 'Content-Type': 'audio/wav' })
+    return res.end(readFileSync(file))
   }
 
   if (req.method === 'GET' && req.url === '/profile') {
@@ -93,6 +109,37 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { card, transcript, timings })
     } catch (err) {
       console.error('lookup failed:', err)
+      return json(res, 500, { error: (err as Error).message })
+    }
+  }
+
+  if (req.method === 'POST' && req.url === '/verify') {
+    const t0 = performance.now()
+    try {
+      const { transcript, card } = JSON.parse((await readBody(req, 20_000)).toString() || '{}') as { transcript?: string; card?: Card }
+      if (!card || typeof transcript !== 'string') return json(res, 400, { error: 'need transcript and card' })
+      if (!treg) return json(res, 200, { card, verification: null, timings: { server_ms: 0 } })
+
+      const verification = await verify(card, profile, treg)
+      const t1 = performance.now()
+      const facts = factsText(verification, card)
+      let updated = card
+      if (facts) {
+        updated = await scorer.score(transcript, facts)
+        // Keep the database row only if the scorer found its title consistent
+        // with what they said; otherwise it's probably someone else.
+        if (verification.person && updated.checked_title) updated.name = verification.person.name
+        else {
+          verification.person = null
+          updated.checked_title = null
+        }
+      }
+      const t2 = performance.now()
+      const timings = { lookup_ms: Math.round(t1 - t0), rescore_ms: Math.round(t2 - t1), server_ms: Math.round(t2 - t0) }
+      console.log(`verify ${JSON.stringify(timings)} person=${verification.person?.name ?? '-'} contact=${verification.contact?.name ?? '-'}`)
+      return json(res, 200, { card: updated, verification, timings })
+    } catch (err) {
+      console.error('verify failed:', err)
       return json(res, 500, { error: (err as Error).message })
     }
   }
