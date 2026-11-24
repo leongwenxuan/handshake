@@ -118,7 +118,7 @@ async function checkRole(shown: CardState, t0: number, rendered: Promise<void>):
   } catch (err) {
     console.error('verify failed:', err)
   }
-  await rendered // a fast answer must not update the page before it exists
+  await rendered.catch(() => {}) // a fast answer must not update the page before it exists
   if (state === shown) {
     shown.result = { ...shown.result, card }
     shown.check = check
@@ -135,8 +135,9 @@ async function saveLead(shown: CardState) {
   if (shown.saving) return
   shown.saving = true
   const { result } = shown
+  const savedAt = new Date().toISOString()
   const leads = await loadLeads()
-  leads.push({ ...result.card, transcript: result.transcript, savedAt: new Date().toISOString() })
+  leads.push({ ...result.card, transcript: result.transcript, savedAt })
   await bridge.setLocalStorage('leads', JSON.stringify(leads))
   console.log(`saved lead #${leads.length}`, result.card)
 
@@ -148,6 +149,7 @@ async function saveLead(shown: CardState) {
   try {
     const t0 = performance.now()
     const { card, check } = shown.roleCheck ? await shown.roleCheck : { card: result.card, check: shown.check }
+    if (card !== result.card) await replaceLead(savedAt, { ...card, transcript: result.transcript, savedAt })
     const name = card.name ?? who
     const saved = await saveToBackend(card, typeof check === 'object' ? check : null, result.transcript)
     console.log(`lead sent in ${Math.round(performance.now() - t0)} ms`, saved)
@@ -161,6 +163,15 @@ async function saveLead(shown: CardState) {
   }
   if (FIXTURE) await bridge.audioControl(false)
   if (state === idle) await updateCardText(bridge, idleText(line))
+}
+
+// Swaps the glasses' copy of a lead for its role-checked version.
+async function replaceLead(savedAt: string, lead: object) {
+  const leads = (await loadLeads()) as { savedAt?: string }[]
+  const i = leads.findIndex(l => l.savedAt === savedAt)
+  if (i < 0) return
+  leads[i] = lead
+  await bridge.setLocalStorage('leads', JSON.stringify(leads))
 }
 
 async function loadLeads(): Promise<unknown[]> {
