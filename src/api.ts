@@ -2,6 +2,7 @@ export interface Card {
   name: string | null
   company: string | null
   role: string | null
+  buyer: string | null
   fit: 'strong' | 'maybe' | 'weak' | 'unknown'
   score: number | null
   why: string
@@ -16,7 +17,7 @@ export interface LookupResult {
 
 // Same host as the dev server by default, so it works from the simulator
 // (localhost) and from a phone on the LAN (the QR code's IP).
-const BACKEND_URL: string =
+export const BACKEND_URL: string =
   import.meta.env.VITE_BACKEND_URL ?? `${location.protocol}//${location.hostname}:8787`
 
 export async function lookup(pcm: Uint8Array<ArrayBuffer>): Promise<LookupResult> {
@@ -35,6 +36,6 @@ export function cardText(card: Card): string {
   const verdict =
     card.fit === 'unknown' || card.score === null
       ? 'NOT SURE'
-      : `${card.fit.toUpperCase()} FIT ${card.score}/10`
+      : `${card.fit.toUpperCase()} FIT ${card.score}/10${card.buyer ? ` · ${card.buyer}` : ''}`
   return [who, verdict, card.why, card.opener].join('\n')
 }

@@ -1,18 +1,50 @@
-import { readFileSync } from 'node:fs'
 import type { Card, Scorer } from './score.ts'
 import type { Transcriber } from './stt.ts'
 import { pcmToWav } from './wav.ts'
 
 const API = 'https://api.openai.com/v1'
 
+export const DEFAULT_MODEL = process.env.OPENAI_MODEL || 'gpt-5.4-mini'
+
+// One structured-output chat call: returns the parsed JSON object.
+export async function chatJSON<T>(
+  apiKey: string,
+  opts: { system: string; user: string; schemaName: string; schema: object; model?: string; reasoningEffort?: string },
+): Promise<T> {
+  const model = opts.model ?? DEFAULT_MODEL
+  const reasoningEffort = opts.reasoningEffort ?? (model.startsWith('gpt-5') ? 'none' : undefined)
+  const res = await fetch(`${API}/chat/completions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: opts.system },
+        { role: 'user', content: opts.user },
+      ],
+      response_format: { type: 'json_schema', json_schema: { name: opts.schemaName, strict: true, schema: opts.schema } },
+      ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+    }),
+  })
+  if (!res.ok) throw new Error(`OpenAI ${res.status}: ${await res.text()}`)
+  const body = (await res.json()) as { choices: { message: { content: string | null; refusal?: string | null } }[] }
+  const msg = body.choices[0]?.message
+  if (!msg?.content) throw new Error(`OpenAI returned no content${msg?.refusal ? `: ${msg.refusal}` : ''}`)
+  return JSON.parse(msg.content) as T
+}
+
 const CARD_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['name', 'company', 'role', 'fit', 'score', 'why', 'opener'],
+  required: ['name', 'company', 'role', 'buyer', 'fit', 'score', 'why', 'opener'],
   properties: {
     name: { type: ['string', 'null'], description: "The other person's name as they said it, or null" },
     company: { type: ['string', 'null'], description: 'Their company, or null' },
     role: { type: ['string', 'null'], description: 'Their role in a few words, or null' },
+    buyer: {
+      type: ['string', 'null'],
+      description: 'The buyer role label from the profile that this person matches, exactly as written there, or null',
+    },
     fit: { type: 'string', enum: ['strong', 'maybe', 'weak', 'unknown'] },
     score: { type: ['integer', 'null'], description: '0-10 fit score, null when fit is unknown' },
     why: { type: 'string', description: 'One reason for the verdict, at most 45 characters' },
@@ -20,54 +52,38 @@ const CARD_SCHEMA = {
   },
 }
 
-function instructions(icp: string) {
-  return `You help someone at an in-person event decide, in one glance, whether the person who just introduced themselves fits their ideal customer profile (ICP). The result is shown on smart glasses with a tiny monochrome display, so every field must be short.
+function instructions(profile: string) {
+  return `You help someone at an in-person event decide, in one glance, whether the person who just introduced themselves is a potential customer for the wearer's company. The result is shown on smart glasses with a tiny monochrome display, so every field must be short.
 
 The transcript is a few seconds of audio from a noisy room, recorded right after a handshake. It may include the wearer's own voice, filler, or misheard words.
 
 Rules:
-- Use only what the person said about themselves, plus well-known public facts about large, famous companies. Never invent facts about a company you don't recognise.
-- If the company is unknown to you or the role is unclear, set fit to "unknown", score to null, and make the opener a qualifying question that would settle it.
+- Use only what the person said about themselves, plus well-known public facts about large, famous companies (size, industry). Never invent facts about a company you don't recognise; judge it from what they said it does.
+- Judge a company by what kind of company it is, not by who its customers are: a startup that builds software is a software company even if it sells to cafes.
+- Judge two things: does their company look like an ideal customer company, and does their role match one of the buyer roles? Set "buyer" to the matching role label, or null. A founder or CEO of a small company counts as its decision maker.
+- Strong fit (8-10): ideal company and a buyer role. Maybe (5-7): one of the two, or a partial match. Weak (0-4): clearly a poor fit, such as students, job seekers, or companies listed as not a fit.
+- A clear role that is not a buyer role is still a verdict (maybe or weak), not unknown. Then the opener asks who owns the most relevant buyer role there.
+- Use fit "unknown" and score null only when you cannot tell their role and have no idea what their company does. Then the opener is a qualifying question that would settle it.
 - Fix an obvious mishearing of a famous company name (for example "Stride" said in a fintech context is probably "Stripe") only when you are confident. Keep personal names as heard.
 - If no name or company was said, return nulls for them and fit "unknown".
-- Score 8-10 strong fit, 5-7 maybe, 0-4 weak.
-- "why" is at most 45 characters. "opener" starts with "Ask: " and is at most 60 characters, specific to them and the ICP.
+- "why" is at most 45 characters. "opener" starts with "Ask: " and is at most 60 characters, specific to them and to what the wearer sells.
 
-ICP:
-${icp}`
+${profile}`
 }
 
-export function openaiScorer(
-  apiKey: string,
-  model = process.env.OPENAI_MODEL || 'gpt-5.4-mini',
-  // For reasoning models (gpt-5 family). Lowest effort keeps lookups fast.
-  reasoningEffort = process.env.OPENAI_REASONING_EFFORT || (model.startsWith('gpt-5') ? 'none' : undefined),
-): Scorer {
-  const icpPath = new URL('../icp.md', import.meta.url)
+// profile() is called on every lookup, so a rebuilt profile applies at once.
+export function openaiScorer(apiKey: string, profile: () => string, model = DEFAULT_MODEL): Scorer {
   return {
-    name: `OpenAI ${model}${reasoningEffort ? ` (${reasoningEffort})` : ''}`,
-    async score(transcript) {
-      // Re-read each time so edits to icp.md apply without a restart.
-      const icp = readFileSync(icpPath, 'utf8')
-      const res = await fetch(`${API}/chat/completions`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: instructions(icp) },
-            { role: 'user', content: `Transcript: "${transcript}"` },
-          ],
-          response_format: { type: 'json_schema', json_schema: { name: 'card', strict: true, schema: CARD_SCHEMA } },
-          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
-        }),
-      })
-      if (!res.ok) throw new Error(`OpenAI ${res.status}: ${await res.text()}`)
-      const body = (await res.json()) as { choices: { message: { content: string | null; refusal?: string | null } }[] }
-      const msg = body.choices[0]?.message
-      if (!msg?.content) throw new Error(`OpenAI returned no content${msg?.refusal ? `: ${msg.refusal}` : ''}`)
-      return JSON.parse(msg.content) as Card
-    },
+    name: `OpenAI ${model}`,
+    score: transcript =>
+      chatJSON<Card>(apiKey, {
+        model,
+        system: instructions(profile()),
+        user: `Transcript: "${transcript}"`,
+        schemaName: 'card',
+        schema: CARD_SCHEMA,
+        reasoningEffort: process.env.OPENAI_REASONING_EFFORT || undefined,
+      }),
   }
 }
 

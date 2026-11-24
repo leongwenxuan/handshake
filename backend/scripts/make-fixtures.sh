@@ -13,5 +13,7 @@ make() { # name, voice, text
 }
 make sarah-stripe Samantha "Hi, I'm Sarah Chen, I run partnerships at Stripe."
 make raj-startup Daniel "Hey, I'm Raj Patel. I'm a founder at Lumio, we do inventory software for cafes."
+make priya-ramp Moira "Hi, I'm Priya Nair, I lead engineering at Ramp."
+make tom-agency Fred "Hey, Tom Becker. I run a small marketing agency, we do social media for local brands."
 make mia-student Karen "Hi! I'm Mia, I'm a student at NYU, just here to learn."
 ls -la

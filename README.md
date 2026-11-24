@@ -1,6 +1,6 @@
 # Handshake
 
-In-person ICP check on Even Realities G2. Someone introduces themselves, you click the ring, and the glasses show whether they fit your ICP, one line of why, and a suggested opener. One more click saves the lead.
+In-person buyer check on Even Realities G2. Type your company once; Handshake reads your website and works out who your customers are and which roles inside them buy. At an event, someone introduces themselves, you click the ring, and the glasses show whether they're a fit, which buyer role they match, one line of why, and a suggested opener. One more click saves the lead.
 
 Built for the Heads Up hackathon (Even Realities x TVM Ventures x Daos Hub), Track 04: AI Assistants & Work. The idea and plan are in [docs/idea.md](docs/idea.md).
 
@@ -10,6 +10,7 @@ One-time setup (macOS):
 
 ```bash
 npm install
+cp backend/.env.example backend/.env   # add OPENAI_API_KEY (and TREG_API_KEY, optional)
 brew install whisper.cpp
 mkdir -p backend/models && curl -L -o backend/models/ggml-base.en.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
@@ -24,6 +25,8 @@ npm run dev        # Vite dev server on :5173
 npm run simulate   # Even Hub simulator, automation API on :9898
 ```
 
+Open http://localhost:5173 (the phone screen of the app), type your company or its website and press **Build**. The profile is saved to `backend/data/profile.json` (git-ignored). Until you build one, cards are judged against the sample `backend/icp.md`.
+
 Real glasses: `npx evenhub qr --url http://<your-ip>:5173` and scan with the Even Realities app.
 
 Package: `npm run pack` produces an `.ehpk`.
@@ -34,9 +37,13 @@ Package: `npm run pack` produces an `.ehpk`.
 
 ## How it works
 
-Tap → the glasses mic records until the person stops talking (or you tap again) → the clip goes to the backend → Whisper transcribes it → the scorer turns the transcript into a card → the glasses show the card with **Save lead** / **Skip**. Double-tap goes back, or exits from the home screen. Audio stays in memory for the request and is never stored.
+**Setup (phone):** company name or website → Treg looks up the company (domain, industry, size) while the backend reads the homepage → OpenAI turns that into a profile: problem, solution, ideal customer companies, three buyer roles with real job titles, and who is not a fit. About 5-6 s.
 
-The scorer is a placeholder until a Claude key is configured.
+**At the event (glasses):** tap → the glasses mic records until the person stops talking (or you tap again) → the clip goes to the backend → Whisper transcribes it → OpenAI judges the transcript against the profile and returns a card → the glasses show the card with **Save lead** / **Skip**. Double-tap goes back, or exits from the home screen. Audio stays in memory for the request and is never stored.
+
+Without an OpenAI key the scorer is a placeholder that only pulls out the name and company.
+
+Treg is used only for work information (what a company does, who holds a role there), never personal contact details.
 
 ## Disclosure
 
