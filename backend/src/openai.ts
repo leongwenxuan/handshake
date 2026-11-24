@@ -50,7 +50,11 @@ const CARD_SCHEMA = {
       description:
         'Only when checked facts are given: their job title from the facts, if it is consistent with what they said about their role. Null if it conflicts (it may be a different person with the same name) or there are no facts',
     },
-    company_fit: { type: 'string', enum: ['yes', 'no', 'unknown'], description: 'Does their company look like an ideal customer company?' },
+    company_fit: {
+      type: 'string',
+      enum: ['yes', 'no', 'unknown'],
+      description: "Does their company look like an ideal customer company? Judge the company alone: this person's role does not change it",
+    },
     buyer: {
       type: ['string', 'null'],
       description: 'The buyer role label from the profile that this person matches, exactly as written there, or null',

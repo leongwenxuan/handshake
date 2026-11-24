@@ -102,6 +102,7 @@ export function cardText(card: Card, check: Check): string {
     if (check.contact) lines.push(clip(`Buyer there: ${check.contact.name} (${check.contact.buyer})`, 48))
     else if (check.person && card.checked_title) lines.push(clip(`Verified: ${card.checked_title}`, 48))
     else if (card.buyer && check.company) lines.push('Role not verified') // only matters if they claim a buyer role
+    else lines.push('') // keep the line, so "why" doesn't jump up when "Checking role..." goes
   }
   lines.push(clip(card.why, 48))
   return lines.join('\n')

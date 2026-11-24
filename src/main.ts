@@ -69,6 +69,7 @@ async function playFixture(name: string, capture: Capture) {
 async function finishListening(capture: Capture, reason: StopReason) {
   if (state.kind !== 'listening' || state.capture !== capture) return
   await bridge.audioControl(false)
+  if (state.kind !== 'listening' || state.capture !== capture) return // cancelled meanwhile
   const micDelay = capture.firstChunkAt === null ? null : Math.round(capture.firstChunkAt - capture.startedAt)
   console.log(`capture stopped: ${reason}, ${capture.elapsedMs} ms audio, first chunk after ${micDelay} ms`)
   console.log(`levels (x1000): ${capture.levelTrace}`)
@@ -88,12 +89,14 @@ async function finishListening(capture: Capture, reason: StopReason) {
     const check: Check = result.card.company || result.card.company_domain ? 'pending' : 'off'
     const shown: CardState = { kind: 'card', result, check, roleCheck: null, saving: false }
     state = shown
-    await showCard(bridge, cardText(result.card, check))
+    // Start the role check before Save can be tapped, so any Save waits for it.
+    const rendered = showCard(bridge, cardText(result.card, check))
+    if (check === 'pending') shown.roleCheck = checkRole(shown, t0, rendered)
+    await rendered
     // The simulator freezes a page that gets no events, so in fixture mode
     // keep mic events flowing while the card waits for the role check.
     // They're ignored outside listening; goIdle turns the mic off.
-    if (FIXTURE && check === 'pending') await bridge.audioControl(true)
-    if (check === 'pending') shown.roleCheck = checkRole(shown, t0)
+    if (FIXTURE && check === 'pending' && state === shown) await bridge.audioControl(true)
   } catch (err) {
     console.error('lookup failed:', err)
     if (state === thinking) await goIdle("Couldn't check fit.")
@@ -102,7 +105,7 @@ async function finishListening(capture: Capture, reason: StopReason) {
 
 // Second pass: verify their role and find who to ask for, then update the
 // card in place if it's still on screen.
-async function checkRole(shown: CardState, t0: number): Promise<Final> {
+async function checkRole(shown: CardState, t0: number, rendered: Promise<void>): Promise<Final> {
   let check: Check = 'off'
   let card = shown.result.card
   try {
@@ -115,6 +118,7 @@ async function checkRole(shown: CardState, t0: number): Promise<Final> {
   } catch (err) {
     console.error('verify failed:', err)
   }
+  await rendered // a fast answer must not update the page before it exists
   if (state === shown) {
     shown.result = { ...shown.result, card }
     shown.check = check
@@ -152,8 +156,8 @@ async function saveLead(shown: CardState) {
     else if (saved.drafted) line = `Saved ${name}. Follow-up email drafted.`
   } catch (err) {
     console.error('sending lead failed:', err)
-    // A timeout may still have reached the backend.
-    line = (err as Error).name === 'TimeoutError' ? `Saved ${who} on glasses. Sync unconfirmed.` : `Saved ${who} on glasses only.`
+    // The backend may have stored it before the connection failed.
+    line = `Saved ${who} on glasses. Sync unconfirmed.`
   }
   if (FIXTURE) await bridge.audioControl(false)
   if (state === idle) await updateCardText(bridge, idleText(line))

@@ -17,7 +17,8 @@ interface Lead {
 const section = document.getElementById('leads') as HTMLElement
 const FIT_ORDER = { strong: 0, maybe: 1, weak: 2, unknown: 3 }
 let shown = ''
-let known: Set<string> | null = null // lead ids already on screen; null before the first load
+let known: Set<string> | null = null // lead ids seen so far; null before the first load
+const freshUntil = new Map<string, number>() // new lead id -> when its highlight ends
 
 function esc(s: string) {
   return s.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)
@@ -85,6 +86,11 @@ async function refresh() {
   const key = JSON.stringify(leads.map(l => [l.id, !!l.notion, !!l.followUp]))
   if (key === shown) return // don't redraw (it would close an open email)
   shown = key
+  // The lead first appears before its email and Notion row are ready, so the
+  // highlight lasts a minute rather than one redraw.
+  const now = Date.now()
+  if (known) for (const l of leads) if (!known.has(l.id)) freshUntil.set(l.id, now + 60_000)
+  known = new Set(leads.map(l => l.id)) // an empty first load is the baseline too
   if (!leads.length) {
     section.hidden = true
     return
@@ -92,8 +98,7 @@ async function refresh() {
   const sorted = sortLeads(leads)
   // A lead that arrived while the page was open is outlined with its email
   // open, so a save on the glasses visibly lands here.
-  const fresh = new Set(known ? leads.filter(l => !known!.has(l.id)).map(l => l.id) : [])
-  known = new Set(leads.map(l => l.id))
+  const fresh = new Set(leads.filter(l => (freshUntil.get(l.id) ?? 0) > now).map(l => l.id))
   section.hidden = false
   section.innerHTML = `<h2>People you met</h2>
     <p class="summary">${summary(leads)}</p>
