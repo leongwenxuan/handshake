@@ -1,4 +1,5 @@
 import type { Lead } from './leads.ts'
+import { ACTION_LABEL, action } from './score.ts'
 
 // Saved leads go to a "Handshake leads" database in the wearer's Notion.
 // Setup is one step: create an internal integration, put its secret in
@@ -25,10 +26,12 @@ const SCHEMA = {
   Fit: {
     select: {
       options: [
-        { name: 'Strong', color: 'green' },
-        { name: 'Maybe', color: 'yellow' },
-        { name: 'Weak', color: 'gray' },
-        { name: 'Unknown', color: 'default' },
+        { name: 'Pitch them', color: 'green' },
+        { name: 'Get an intro', color: 'yellow' },
+        { name: 'Not sure yet', color: 'default' },
+        { name: 'Not a fit', color: 'gray' },
+        { name: 'Competitor', color: 'red' },
+        { name: 'Colleague', color: 'brown' },
       ],
     },
   },
@@ -43,14 +46,10 @@ const SCHEMA = {
   Status: { select: { options: [{ name: 'New', color: 'blue' }, { name: 'Contacted', color: 'purple' }, { name: 'Meeting', color: 'green' }] } },
 }
 
-function label(card: Lead['card']) {
-  if (card.relation === 'competitor') return 'Competitor'
-  if (card.relation === 'colleague') return 'Colleague'
-  return card.fit[0].toUpperCase() + card.fit.slice(1)
-}
+const label = (card: Lead['card']) => ACTION_LABEL[action(card)]
 
 function icon(card: Lead['card']) {
-  const emoji = card.relation && card.relation !== 'prospect' ? '⚫' : card.fit === 'strong' ? '🟢' : card.fit === 'maybe' ? '🟡' : '⚪'
+  const emoji = { pitch: '🟢', intro: '🟡', unsure: '⚪', pass: '⚪', competitor: '⚫', colleague: '⚫' }[action(card)]
   return { type: 'emoji', emoji }
 }
 

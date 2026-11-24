@@ -15,6 +15,27 @@ export interface Card {
   opener: string
 }
 
+// What to do with this person, from the two things the scorer judges.
+// Same rule as the app's action() in src/api.ts.
+export type Action = 'pitch' | 'intro' | 'unsure' | 'pass' | 'competitor' | 'colleague'
+
+export function action(card: Card): Action {
+  if (card.relation === 'competitor') return 'competitor'
+  if (card.relation === 'colleague') return 'colleague'
+  if (card.company_fit === 'no') return 'pass'
+  if (card.company_fit === 'yes') return card.buyer ? 'pitch' : 'intro'
+  return card.buyer || card.fit !== 'weak' ? 'unsure' : 'pass'
+}
+
+export const ACTION_LABEL: Record<Action, string> = {
+  pitch: 'Pitch them',
+  intro: 'Get an intro',
+  unsure: 'Not sure yet',
+  pass: 'Not a fit',
+  competitor: 'Competitor',
+  colleague: 'Colleague',
+}
+
 export interface Scorer {
   name: string
   // facts: checked information from the role lookup, used for a second pass

@@ -1,16 +1,21 @@
-import type { Card } from './api'
+import { action, type Card } from './api'
 
-// The verdict as a picture for the glasses' image container: a ring that
-// fills with the score and the number in the middle, readable at a glance.
+// The verdict as a picture for the glasses' image container: what to do
+// next as one mark in a ring (full for pitch, half for an intro), readable
+// at a glance. The phone list draws the same mark.
 // White is bright green on the display; black is off.
 
 export const BADGE_SIZE = 84
 
-function glyph(card: Card): { text: string; fill: number | null } {
-  if (card.relation === 'competitor') return { text: 'VS', fill: null }
-  if (card.relation === 'colleague') return { text: '=', fill: null }
-  if (card.score === null || card.fit === 'unknown') return { text: '?', fill: null }
-  return { text: String(card.score), fill: card.score / 10 }
+export function glyph(card: Card): { text: string; fill: number | null } {
+  return {
+    pitch: { text: '✓', fill: 1 },
+    intro: { text: '→', fill: 0.5 },
+    unsure: { text: '?', fill: null },
+    pass: { text: '✕', fill: null },
+    competitor: { text: 'VS', fill: null },
+    colleague: { text: '=', fill: null },
+  }[action(card)]
 }
 
 // Same picture for the same card, so an unchanged verdict isn't resent.

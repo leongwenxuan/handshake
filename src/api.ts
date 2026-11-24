@@ -13,6 +13,29 @@ export interface Card {
   opener: string
 }
 
+// What to do with this person: the verdict the wearer reads. It comes from
+// the two things the scorer judges (does their company fit, are they the
+// buyer), so it never disagrees with them the way a fuzzy "maybe" could.
+export type Action = 'pitch' | 'intro' | 'unsure' | 'pass' | 'competitor' | 'colleague'
+
+export function action(card: Card): Action {
+  if (card.relation === 'competitor') return 'competitor'
+  if (card.relation === 'colleague') return 'colleague'
+  if (card.company_fit === 'no') return 'pass'
+  if (card.company_fit === 'yes') return card.buyer ? 'pitch' : 'intro'
+  // Company unclear: a buyer, or anyone not ruled out, is worth a question.
+  return card.buyer || card.fit !== 'weak' ? 'unsure' : 'pass'
+}
+
+export const ACTION_LABEL: Record<Action, string> = {
+  pitch: 'Pitch them',
+  intro: 'Get an intro',
+  unsure: 'Not sure yet',
+  pass: 'Not a fit',
+  competitor: 'Competitor',
+  colleague: 'Colleague',
+}
+
 export interface Verification {
   company: { name: string | null; domain: string; employees: number | null; industry: string | null; matched_by: 'domain' | 'name' } | null
   person: { name: string; title: string | null; match: 'exact' | 'close'; profile_url: string | null } | null
@@ -112,14 +135,14 @@ function clip(s: string, max: number) {
 // The role check fills in inside the header, so what to say never moves.
 export function cardParts(card: Card, check: Check): { header: string; ask: string; why: string } {
   const who = [card.name ?? 'Unknown', card.company].filter(Boolean).join(', ')
-  const verdict =
-    card.relation === 'competitor'
-      ? 'COMPETITOR - no pitch'
-      : card.relation === 'colleague'
-        ? 'COLLEAGUE'
-        : card.fit === 'unknown' || card.score === null
-          ? 'NOT SURE'
-          : `${card.fit.toUpperCase()} ${card.score}/10${card.buyer ? ` - Buyer: ${card.buyer}` : ''}`
+  const verdict = {
+    pitch: `PITCH THEM${card.buyer ? ` - Buyer: ${card.buyer}` : ''}`,
+    intro: 'GET AN INTRO - not the buyer',
+    unsure: 'NOT SURE YET - ask more',
+    pass: 'NOT A FIT - just network',
+    competitor: 'COMPETITOR - no pitch',
+    colleague: 'COLLEAGUE',
+  }[action(card)]
   const header = [clip(who, 44), clip(verdict, 44)]
   if (check === 'pending') header.push('Checking role...')
   else if (check !== 'off') {

@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { chatJSON } from './openai.ts'
 import type { Profile } from './profile.ts'
-import type { Card } from './score.ts'
+import { action, type Card } from './score.ts'
 import type { Verification } from './verify.ts'
 
 // Leads saved from the glasses. Kept in backend/data/leads.jsonl (one JSON
@@ -77,6 +77,16 @@ const FOLLOW_UP_SCHEMA = {
   },
 }
 
+// The verdict in words for the email writer.
+const VERDICT: Record<ReturnType<typeof action>, (card: Card) => string> = {
+  pitch: card => `Pitch them: their company fits and they match the buyer role "${card.buyer}"`,
+  intro: () => "Get an intro: their company fits, but they aren't the buyer",
+  unsure: () => 'Not sure yet: too little was said to tell if their company fits',
+  pass: () => 'Not a fit for what the sender sells',
+  competitor: () => 'Competitor',
+  colleague: () => 'Colleague',
+}
+
 export function draftFollowUp(apiKey: string, lead: Pick<Lead, 'card' | 'verification' | 'transcript'>, profile: Profile | null) {
   const { card, verification: v } = lead
   const facts = [
@@ -85,7 +95,7 @@ export function draftFollowUp(apiKey: string, lead: Pick<Lead, 'card' | 'verific
     `Role (as they said it): ${card.role ?? 'unknown'}`,
     card.checked_title ? `Checked job title: ${card.checked_title}` : null,
     card.relation === 'competitor' ? 'They work at a competitor.' : card.relation === 'colleague' ? "They work at the sender's own company." : null,
-    `Fit verdict: ${card.fit}${card.buyer ? `, matches buyer role "${card.buyer}"` : ''} (${card.why})`,
+    `Verdict: ${VERDICT[action(card)](card)} (${card.why})`,
     v?.contact ? `Better person to reach at their company: ${v.contact.name}, ${v.contact.title ?? v.contact.buyer}` : null,
     `What they said when we met: "${lead.transcript}"`,
   ].filter(Boolean)
@@ -98,8 +108,9 @@ Rules:
 - 60 to 110 words. Warm, plain and specific; no hype, no buzzwords, no exclamation marks.
 - Open with one natural line that it was good to meet them, recalling something they said in your own words (never quote them back, never invent details).
 - One sentence on why the sender's product may matter to them, tied to their role and company.
-- If a better person to reach is named below, end by asking for a short intro to that person by name. This holds even when the fit verdict is weak: their company fits, they just aren't the buyer.
-- If none is named, never ask for an intro. Then, if the fit verdict is weak, or they work at a competitor or the sender's own company, write a friendly keep-in-touch note with no sales ask.
+- If a better person to reach is named below, end by asking for a short intro to that person by name.
+- Never name anyone else. If the verdict is "Get an intro" and no one is named, end by asking who on their team looks after this.
+- If the verdict is "Not a fit", or they work at a competitor or the sender's own company, write a friendly keep-in-touch note with no sales ask.
 - Otherwise end with one clear, low-effort ask, such as a 20-minute call next week.
 - Start with "Hi <first name>," and end with "Best," on its own line and nothing after it (the sender adds their name).`,
     user: `${seller}\n\nThe person:\n${facts.join('\n')}`,

@@ -1,7 +1,8 @@
-import { BACKEND_URL, type Card, type Verification } from './api'
+import { glyph } from './badge'
+import { ACTION_LABEL, BACKEND_URL, action, type Action, type Card, type Verification } from './api'
 
-// The phone's "People you met" list: every lead saved from the glasses, the
-// ones worth a follow-up first. Each row opens to who to ask for, the
+// The phone's "People you met" list: every lead saved from the glasses,
+// grouped by what to do next (pitch, get an intro, find out more). Each row opens to who to ask for, the
 // drafted email and what they said. Refreshes while the page is open, so a
 // save on the glasses shows up here.
 
@@ -17,7 +18,6 @@ interface Lead {
 }
 
 const section = document.getElementById('leads') as HTMLElement
-const FIT_ORDER = { strong: 0, maybe: 1, weak: 2, unknown: 3 }
 let shown = ''
 let leads: Lead[] = []
 let known: Set<string> | null = null // lead ids seen so far; null before the first load
@@ -28,39 +28,29 @@ function esc(s: string) {
   return s.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)
 }
 
-const isOther = (l: Lead) => (l.card.relation ?? 'prospect') !== 'prospect'
-// Worth following up: a prospect at a company that fits, or a named intro.
-const isFollowUp = (l: Lead) => !isOther(l) && (l.card.fit === 'strong' || l.card.fit === 'maybe' || !!l.verification?.contact)
+// The groups, in order. Competitors and colleagues sit with "Not a fit":
+// none of them gets a sales follow-up.
+const GROUPS: { title: string; has: Action[] }[] = [
+  { title: 'Pitch them', has: ['pitch'] },
+  { title: 'Get an intro', has: ['intro'] },
+  { title: 'Not sure yet', has: ['unsure'] },
+  { title: 'Not a fit', has: ['pass', 'competitor', 'colleague'] },
+]
 
-// Colleagues and competitors go last, whatever the model scored them.
-const rank = (l: Lead) => (isOther(l) ? 4 : FIT_ORDER[l.card.fit])
+const byScore = (a: Lead, b: Lead) => (b.card.score ?? -1) - (a.card.score ?? -1) || b.savedAt.localeCompare(a.savedAt)
+const verdict = (card: Card) => ACTION_LABEL[action(card)]
 
-function sortLeads(list: Lead[]) {
-  return [...list].sort(
-    (a, b) => rank(a) - rank(b) || (b.card.score ?? -1) - (a.card.score ?? -1) || b.savedAt.localeCompare(a.savedAt),
-  )
-}
-
-function verdict(card: Card) {
-  if (card.relation === 'competitor') return 'Competitor'
-  if (card.relation === 'colleague') return 'Colleague'
-  if (card.fit === 'unknown' || card.score === null) return 'Not sure'
-  return `${card.fit[0].toUpperCase()}${card.fit.slice(1)} fit`
-}
-
-// The same ring as the glasses' badge: fills with the score.
+// The same ring as the glasses' badge: the next step as one mark.
 function ring(card: Card) {
-  const other = card.relation === 'competitor' ? 'VS' : card.relation === 'colleague' ? '=' : null
-  const score = other ? null : card.score
+  const { text, fill } = glyph(card)
   const r = 16
   const c = 2 * Math.PI * r
-  const fill = score === null ? 0 : (score / 10) * c
-  return `<span class="ring" aria-label="${esc(verdict(card))}${score !== null ? `, ${score} out of 10` : ''}">
+  return `<span class="ring" aria-label="${esc(verdict(card))}">
     <svg width="40" height="40" viewBox="0 0 40 40" aria-hidden="true">
       <circle class="track" cx="20" cy="20" r="${r}" fill="none" stroke-width="3.5"/>
-      ${fill ? `<circle class="fill" cx="20" cy="20" r="${r}" fill="none" stroke-width="3.5" stroke-dasharray="${fill} ${c}"/>` : ''}
+      ${fill ? `<circle class="fill" cx="20" cy="20" r="${r}" fill="none" stroke-width="3.5" stroke-dasharray="${fill * c} ${c}"/>` : ''}
     </svg>
-    <b>${other ?? score ?? '?'}</b>
+    <b>${text}</b>
   </span>`
 }
 
@@ -99,10 +89,10 @@ function leadHTML(l: Lead, fresh: boolean) {
   const { card, verification: v } = l
   const company = v?.company?.name ?? card.company
   const time = new Date(l.savedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  const tone = isOther(l) ? 'other' : card.fit
+  const tone = `is-${action(card)}`
   const isOpen = open.has(l.id) || fresh
   const tags = [
-    `<span class="tag verdict">${verdict(card)}${!isOther(l) && card.score !== null ? ` · ${card.score}/10` : ''}</span>`,
+    `<span class="tag verdict">${verdict(card)}</span>`,
     card.checked_title ? `<span class="tag ok">✓ ${esc(card.checked_title)}</span>` : card.role ? `<span class="tag">${esc(card.role)}</span>` : '',
     card.buyer ? `<span class="tag">Buyer: ${esc(card.buyer)}</span>` : '',
     v?.company?.employees ? `<span class="tag">${v.company.employees.toLocaleString()} people</span>` : '',
@@ -143,12 +133,12 @@ function leadHTML(l: Lead, fresh: boolean) {
 }
 
 function stats(list: Lead[]) {
-  const strong = list.filter(l => l.card.fit === 'strong' && !isOther(l)).length
-  const intros = list.filter(l => l.verification?.contact).length
+  const pitch = list.filter(l => action(l.card) === 'pitch').length
+  const intros = list.filter(l => action(l.card) === 'intro').length
   return [
     `<span class="stat"><b>${list.length}</b> met</span>`,
-    `<span class="stat good"><b>${strong}</b> strong</span>`,
-    intros ? `<span class="stat good"><b>${intros}</b> intro${intros === 1 ? '' : 's'} to ask for</span>` : '',
+    pitch ? `<span class="stat good"><b>${pitch}</b> to pitch</span>` : '',
+    intros ? `<span class="stat good"><b>${intros}</b> intro${intros === 1 ? '' : 's'} to get</span>` : '',
   ].join('')
 }
 
@@ -165,15 +155,14 @@ function draw() {
     return
   }
   const fresh = new Set(leads.filter(l => (freshUntil.get(l.id) ?? 0) > now).map(l => l.id))
-  const sorted = sortLeads(leads)
-  const follow = sorted.filter(isFollowUp)
-  const rest = sorted.filter(l => !isFollowUp(l))
-  const group = (title: string, list: Lead[]) =>
-    list.length ? `<p class="label">${title}</p><div class="list">${list.map(l => leadHTML(l, fresh.has(l.id))).join('')}</div>` : ''
+  const sorted = [...leads].sort(byScore)
+  const groups = GROUPS.map(g => {
+    const list = sorted.filter(l => g.has.includes(action(l.card)))
+    return list.length ? `<p class="label">${g.title}</p><div class="list">${list.map(l => leadHTML(l, fresh.has(l.id))).join('')}</div>` : ''
+  })
   section.innerHTML = `<h1>People you met</h1>
     <div class="stats">${stats(leads)}</div>
-    ${group('Follow up', follow)}
-    ${group(follow.length ? 'Everyone else' : 'Met today', rest)}`
+    ${groups.join('')}`
 }
 
 section.addEventListener('click', e => {

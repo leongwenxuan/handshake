@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { whisperLocal } from './stt.ts'
-import { mockScorer } from './score.ts'
+import { action, mockScorer } from './score.ts'
 import { openaiScorer, openaiTranscriber } from './openai.ts'
 import { buildProfile, loadProfile, profileText, saveProfile, toDomain, type Profile } from './profile.ts'
 import { treg as makeTreg } from './treg.ts'
@@ -200,8 +200,9 @@ const server = createServer(async (req, res) => {
         }
         // The card updates in place while the wearer reads it: keep the lines
         // that didn't need to change so only the new facts move.
-        if (updated.fit === card.fit) updated.why = card.why
-        if (!verification.contact && (updated.fit === card.fit || named)) updated.opener = card.opener
+        const same = action(updated) === action(card)
+        if (same) updated.why = card.why
+        if (!verification.contact && (same || named)) updated.opener = card.opener
       }
       const t2 = performance.now()
       const timings = { lookup_ms: Math.round(t1 - t0), rescore_ms: Math.round(t2 - t1), server_ms: Math.round(t2 - t0) }
