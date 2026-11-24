@@ -13,13 +13,25 @@ interface Profile {
   icp: { industries: string[]; company_size: string; stage: string; regions: string[]; signals: string[] }
   buyers: Buyer[]
   not_a_fit: string[]
+  competitors?: string[]
+  you?: string | null
   note: string | null
 }
+
+type SetupEvent =
+  | { step: 'company'; found: boolean; detail: string | null }
+  | { step: 'site'; found: boolean; detail: string | null }
+  | { step: 'profile' }
+  | { profile: Profile }
+  | { error: string }
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 const form = $<HTMLFormElement>('setup')
 const companyInput = $<HTMLInputElement>('company')
 const noteInput = $<HTMLInputElement>('note')
+const youInput = $<HTMLInputElement>('you')
+const progress = $<HTMLOListElement>('progress')
+let active: Profile | null = null // the profile on screen
 const button = $<HTMLButtonElement>('build')
 const status = $<HTMLParagraphElement>('status')
 const section = $<HTMLElement>('profile')
@@ -27,7 +39,8 @@ const current = $<HTMLDivElement>('current')
 
 // Once a profile exists, setup shrinks to one line so the leads come first.
 function collapse(p: Profile) {
-  $('current-name').textContent = p.company
+  active = p
+  $('current-name').textContent = p.company + (p.you ? ` as ${p.you}` : '')
   $('current-domain').textContent = p.domain ?? ''
   current.hidden = false
   form.hidden = true
@@ -85,6 +98,13 @@ function render(p: Profile) {
 
     <h2>Not a fit</h2>
     <ul>${p.not_a_fit.map(s => `<li>${esc(s)}</li>`).join('')}</ul>
+    ${
+      p.competitors?.length
+        ? `<h2>Competitors</h2>
+    <div class="chips">${p.competitors.map(c => `<span class="chip">${esc(c)}</span>`).join('')}</div>
+    <p class="foot">People from these companies get a "Competitor" card instead of a pitch.</p>`
+        : ''
+    }
 
     <p class="foot">The glasses use this for every introduction. Build again to change it.</p>`
 }
@@ -96,6 +116,7 @@ async function loadExisting() {
     if (!profile) return setStatus('No company yet. The glasses use the sample profile until you build one.')
     companyInput.value = profile.domain ?? profile.company
     noteInput.value = profile.note ?? ''
+    youInput.value = profile.you ?? ''
     render(profile)
     collapse(profile)
   } catch {
@@ -103,24 +124,95 @@ async function loadExisting() {
   }
 }
 
+// The three setup steps, shown as they happen.
+function showSteps(company: string) {
+  progress.hidden = false
+  progress.innerHTML = [`Looking up ${esc(company)}`, 'Reading the website', 'Working out who buys']
+    .map((t, i) => `<li class="${i === 0 ? 'active' : ''}"><span>${t} <span class="detail"></span></span></li>`)
+    .join('')
+}
+
+function markStep(i: number, state: 'done' | 'miss' | 'active', label?: string, detail?: string | null) {
+  const li = progress.children[i] as HTMLLIElement | undefined
+  if (!li) return
+  li.className = state
+  if (label) (li.firstElementChild as HTMLElement).firstChild!.textContent = `${label} `
+  ;(li.querySelector('.detail') as HTMLElement).textContent = detail ?? ''
+}
+
+async function build(company: string, note: string | null, you: string | null): Promise<Profile> {
+  showSteps(company)
+  const res = await fetch(`${BACKEND_URL}/profile`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ company, note, you }),
+  })
+  if (!res.headers.get('Content-Type')?.includes('ndjson') || !res.body) {
+    const body = (await res.json()) as { profile?: Profile; error?: string }
+    if (!res.ok || !body.profile) throw new Error(body.error ?? `backend ${res.status}`)
+    return body.profile
+  }
+  // One JSON object per line: progress steps, then the profile or an error.
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
+  let buffer = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += value
+    let nl: number
+    while ((nl = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, nl).trim()
+      buffer = buffer.slice(nl + 1)
+      if (!line) continue
+      const ev = JSON.parse(line) as SetupEvent
+      if ('error' in ev) throw new Error(ev.error)
+      if ('profile' in ev) {
+        markStep(2, 'done', 'Worked out who buys')
+        return ev.profile
+      }
+      if (ev.step === 'company') {
+        markStep(0, ev.found ? 'done' : 'miss', ev.found ? 'Found' : 'No database match for', ev.detail ?? company)
+        markStep(1, 'active')
+      } else if (ev.step === 'site') {
+        markStep(1, ev.found ? 'done' : 'miss', ev.found ? 'Read' : "Couldn't read", ev.detail ?? 'the website')
+      } else if (ev.step === 'profile') {
+        markStep(2, 'active', 'Working out who buys...')
+      }
+    }
+  }
+  throw new Error('Setup stopped before it finished. Try again.')
+}
+
 form.addEventListener('submit', async e => {
   e.preventDefault()
   const company = companyInput.value.trim()
   if (!company) return companyInput.focus()
+  const note = noteInput.value.trim() || null
+  const you = youInput.value.trim() || null
   button.disabled = true
-  setStatus(`Reading ${company} and working out who buys… (about 6 s)`)
+  setStatus('')
   try {
-    const res = await fetch(`${BACKEND_URL}/profile`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ company, note: noteInput.value.trim() || undefined }),
-    })
-    const body = (await res.json()) as { profile?: Profile; error?: string }
-    if (!res.ok || !body.profile) throw new Error(body.error ?? `backend ${res.status}`)
-    render(body.profile)
-    collapse(body.profile)
+    // Same company and focus: only the name changed, so don't rebuild.
+    const sameCompany = active && (company === active.domain || company.toLowerCase() === active.company.toLowerCase())
+    let profile: Profile
+    if (active && sameCompany && (active.note ?? null) === note && (active.you ?? null) !== you) {
+      const res = await fetch(`${BACKEND_URL}/profile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ company, you, only: 'you' }),
+      })
+      const body = (await res.json()) as { profile?: Profile; error?: string }
+      if (!res.ok || !body.profile) throw new Error(body.error ?? `backend ${res.status}`)
+      profile = body.profile
+    } else {
+      profile = await build(company, note, you)
+    }
+    render(profile)
+    collapse(profile)
+    setTimeout(() => (progress.hidden = true), 2500)
     setStatus('Ready. Tap the ring as someone starts introducing themselves.')
   } catch (err) {
+    progress.hidden = true
     setStatus((err as Error).message, true)
   } finally {
     button.disabled = false

@@ -21,6 +21,26 @@ export interface Lead {
   savedAt: string
   followUp: FollowUp | null
   notion: { id: string; url: string } | null
+  meetings?: number // times saved; missing means 1
+  firstMet?: string
+}
+
+const norm = (s: string | null | undefined) =>
+  (s ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+
+// An earlier save of the same person: same name at the same company.
+export function findSame(leads: Lead[], lead: Pick<Lead, 'card' | 'verification'>): Lead | null {
+  const name = norm(lead.card.name)
+  if (!name || !name.includes(' ')) return null // a first name alone is too ambiguous
+  const company = (l: Pick<Lead, 'card' | 'verification'>) => norm(l.verification?.company?.domain ?? l.card.company_domain ?? l.card.company)
+  const at = company(lead)
+  if (!at) return null
+  return leads.find(l => norm(l.card.name) === name && company(l) === at) ?? null
 }
 
 const DATA_DIR = new URL('../data/', import.meta.url)
@@ -64,6 +84,7 @@ export function draftFollowUp(apiKey: string, lead: Pick<Lead, 'card' | 'verific
     `Company: ${v?.company?.name ?? card.company ?? 'unknown'}`,
     `Role (as they said it): ${card.role ?? 'unknown'}`,
     card.checked_title ? `Checked job title: ${card.checked_title}` : null,
+    card.relation === 'competitor' ? 'They work at a competitor.' : card.relation === 'colleague' ? "They work at the sender's own company." : null,
     `Fit verdict: ${card.fit}${card.buyer ? `, matches buyer role "${card.buyer}"` : ''} (${card.why})`,
     v?.contact ? `Better person to reach at their company: ${v.contact.name}, ${v.contact.title ?? v.contact.buyer}` : null,
     `What they said when we met: "${lead.transcript}"`,
@@ -78,7 +99,7 @@ Rules:
 - Open with one natural line that it was good to meet them, recalling something they said in your own words (never quote them back, never invent details).
 - One sentence on why the sender's product may matter to them, tied to their role and company.
 - If a better person to reach is named below, ask for a short intro to that person by name. If none is named, never ask for an intro.
-- If the fit verdict is weak, write a friendly keep-in-touch note with no sales ask.
+- If the fit verdict is weak, or they work at a competitor or the sender's own company, write a friendly keep-in-touch note with no sales ask.
 - Otherwise end with one clear, low-effort ask, such as a 20-minute call next week.
 - Start with "Hi <first name>," and end with "Best," on its own line and nothing after it (the sender adds their name).`,
     user: `${seller}\n\nThe person:\n${facts.join('\n')}`,

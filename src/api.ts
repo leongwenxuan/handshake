@@ -4,6 +4,7 @@ export interface Card {
   company_domain: string | null
   role: string | null
   checked_title: string | null
+  relation?: 'prospect' | 'colleague' | 'competitor'
   company_fit: 'yes' | 'no' | 'unknown'
   buyer: string | null
   fit: 'strong' | 'maybe' | 'weak' | 'unknown'
@@ -22,6 +23,7 @@ export interface LookupResult {
   card: Card
   transcript: string
   timings: { audio_s: number; stt_ms: number; score_ms: number; server_ms: number }
+  only_wearer?: boolean // only the wearer's own introduction was heard
 }
 
 export interface VerifyResult {
@@ -65,6 +67,7 @@ export interface SaveResult {
   notion: 'saved' | 'failed' | 'off'
   notionError: string | null
   drafted: boolean
+  again: boolean // met before: the existing lead was updated
 }
 
 export async function saveLead(card: Card, verification: Verification | null, transcript: string): Promise<SaveResult> {
@@ -86,24 +89,25 @@ function clip(s: string, max: number) {
   return `${(space > max / 2 ? cut.slice(0, space) : cut).replace(/[\s,;:.-]+$/, '')}...`
 }
 
-// Formats the card for the 576x288 display, most important first:
-//   who / verdict / what to say / role check / why
-// The role-check line sits below what to say, so when it fills in, the
-// lines the wearer is reading don't move.
-export function cardText(card: Card, check: Check): string {
+// The card's text for the glasses, in three blocks (see glasses.ts):
+//   header: who / verdict / role check   ask: what to say   why: the reason
+// The role check fills in inside the header, so what to say never moves.
+export function cardParts(card: Card, check: Check): { header: string; ask: string; why: string } {
   const who = [card.name ?? 'Unknown', card.company].filter(Boolean).join(', ')
   const verdict =
-    card.fit === 'unknown' || card.score === null
-      ? 'NOT SURE'
-      : `${card.fit.toUpperCase()} ${card.score}/10${card.buyer ? ` - Buyer: ${card.buyer}` : ''}`
-  const lines = [clip(who, 48), clip(verdict, 48), clip(card.opener, 60)]
-  if (check === 'pending') lines.push('Checking role...')
+    card.relation === 'competitor'
+      ? 'COMPETITOR - no pitch'
+      : card.relation === 'colleague'
+        ? 'COLLEAGUE'
+        : card.fit === 'unknown' || card.score === null
+          ? 'NOT SURE'
+          : `${card.fit.toUpperCase()} ${card.score}/10${card.buyer ? ` - Buyer: ${card.buyer}` : ''}`
+  const header = [clip(who, 44), clip(verdict, 44)]
+  if (check === 'pending') header.push('Checking role...')
   else if (check !== 'off') {
-    if (check.contact) lines.push(clip(`Buyer there: ${check.contact.name} (${check.contact.buyer})`, 48))
-    else if (check.person && card.checked_title) lines.push(clip(`Verified: ${card.checked_title}`, 48))
-    else if (card.buyer && check.company) lines.push('Role not verified') // only matters if they claim a buyer role
-    else lines.push('') // keep the line, so "why" doesn't jump up when "Checking role..." goes
+    if (check.contact) header.push(clip(`Buyer there: ${check.contact.name} (${check.contact.buyer})`, 44))
+    else if (check.person && card.checked_title) header.push(clip(`Verified: ${card.checked_title}`, 44))
+    else if (card.buyer && check.company) header.push('Role not verified') // only matters if they claim a buyer role
   }
-  lines.push(clip(card.why, 48))
-  return lines.join('\n')
+  return { header: header.join('\n'), ask: clip(card.opener, 60), why: clip(card.why, 52) }
 }

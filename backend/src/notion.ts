@@ -43,6 +43,17 @@ const SCHEMA = {
   Status: { select: { options: [{ name: 'New', color: 'blue' }, { name: 'Contacted', color: 'purple' }, { name: 'Meeting', color: 'green' }] } },
 }
 
+function label(card: Lead['card']) {
+  if (card.relation === 'competitor') return 'Competitor'
+  if (card.relation === 'colleague') return 'Colleague'
+  return card.fit[0].toUpperCase() + card.fit.slice(1)
+}
+
+function icon(card: Lead['card']) {
+  const emoji = card.relation && card.relation !== 'prospect' ? '⚫' : card.fit === 'strong' ? '🟢' : card.fit === 'maybe' ? '🟡' : '⚪'
+  return { type: 'emoji', emoji }
+}
+
 export function notion(token: string) {
   let target: Promise<NotionTarget> | null = null
 
@@ -104,17 +115,16 @@ export function notion(token: string) {
     return target
   }
 
-  async function addLead(lead: Lead): Promise<{ id: string; url: string }> {
-    const { data_source_id } = await ensure()
+  function properties(lead: Lead): Record<string, unknown> {
     const { card, verification: v } = lead
     const contact = v?.contact ? [v.contact.name, v.contact.title].filter(Boolean).join(', ') : null
     const website = v?.company?.domain ?? card.company_domain
-    const properties: Record<string, unknown> = {
+    return {
       Name: { title: text(card.name ?? 'Unknown') },
       Company: { rich_text: text(v?.company?.name ?? card.company) },
       Role: { rich_text: text(card.role) },
       Verified: { rich_text: text(v?.person ? card.checked_title ?? v.person.title : null) },
-      Fit: { select: { name: card.fit[0].toUpperCase() + card.fit.slice(1) } },
+      Fit: { select: { name: label(card) } },
       Score: { number: card.score },
       Buyer: { select: card.buyer ? { name: card.buyer.replace(/,/g, ' ') } : null },
       'Ask for': { rich_text: text(contact) },
@@ -123,29 +133,47 @@ export function notion(token: string) {
       Employees: { number: v?.company?.employees ?? null },
       Profile: { url: v?.person?.profile_url ?? null },
       Met: { date: { start: lead.savedAt } },
-      Status: { select: { name: 'New' } },
     }
-    const para = (s: string) => ({ object: 'block', type: 'paragraph', paragraph: { rich_text: text(s) } })
-    const heading = (s: string) => ({ object: 'block', type: 'heading_3', heading_3: { rich_text: text(s) } })
+  }
+
+  const para = (s: string) => ({ object: 'block', type: 'paragraph', paragraph: { rich_text: text(s) } })
+  const heading = (s: string) => ({ object: 'block', type: 'heading_3', heading_3: { rich_text: text(s) } })
+  const quote = (s: string) => ({ object: 'block', type: 'quote', quote: { rich_text: text(s) } })
+  const email = (lead: Lead) =>
+    lead.followUp
+      ? [heading('Follow-up email (draft)'), para(`Subject: ${lead.followUp.subject}`), ...lead.followUp.body.split(/\n{2,}/).map(para)]
+      : []
+
+  async function addLead(lead: Lead): Promise<{ id: string; url: string }> {
+    const { data_source_id } = await ensure()
+    const { card } = lead
     const children = [
       heading('Next line to say'),
       para(card.opener.replace(/^Ask:\s*/, '')),
-      ...(lead.followUp
-        ? [heading('Follow-up email (draft)'), para(`Subject: ${lead.followUp.subject}`), ...lead.followUp.body.split(/\n{2,}/).map(para)]
-        : []),
+      ...email(lead),
       heading('What they said'),
-      { object: 'block', type: 'quote', quote: { rich_text: text(lead.transcript) } },
+      quote(lead.transcript),
     ]
     const page = await call<{ id: string; url: string }>('POST', '/pages', {
       parent: { type: 'data_source_id', data_source_id },
-      icon: { type: 'emoji', emoji: card.fit === 'strong' ? '🟢' : card.fit === 'maybe' ? '🟡' : '⚪' },
-      properties,
+      icon: icon(card),
+      properties: { ...properties(lead), Status: { select: { name: 'New' } } },
       children,
     })
     return { id: page.id, url: page.url }
   }
 
-  return { ensure, addLead }
+  // Met the same person again: refresh the row (keeping its Status) and add
+  // the new conversation below the old one.
+  async function updateLead(pageId: string, lead: Lead): Promise<void> {
+    await call('PATCH', `/pages/${pageId}`, { icon: icon(lead.card), properties: properties(lead) })
+    const when = new Date(lead.savedAt).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
+    await call('PATCH', `/blocks/${pageId}/children`, {
+      children: [heading(`Met again, ${when}`), quote(lead.transcript), ...email(lead)],
+    })
+  }
+
+  return { ensure, addLead, updateLead }
 }
 
 export type Notion = ReturnType<typeof notion>

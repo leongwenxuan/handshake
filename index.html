@@ -95,6 +95,28 @@
       .lead.new { outline: 2px solid var(--accent); outline-offset: -1px; }
       .lead .meta { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; font-size: 12px; color: var(--muted); }
       .lead .meta a { color: var(--accent); text-decoration: none; font-weight: 600; }
+      .steps { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; }
+      .steps li { display: flex; gap: 10px; align-items: baseline; color: var(--muted); }
+      .steps li::before { content: ''; flex: none; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--line); transform: translateY(-1px); }
+      .steps li.active { color: var(--text); }
+      .steps li.active::before { border-color: var(--accent); animation: pulse 1s ease-in-out infinite; }
+      .steps li.done { color: var(--text); }
+      .steps li.done::before { background: var(--accent); border-color: var(--accent); }
+      .steps li.miss::before { border-color: var(--muted); }
+      .steps .detail { color: var(--muted); font-size: 13px; }
+      @keyframes pulse { 50% { opacity: 0.3; } }
+      @media (prefers-reduced-motion: reduce) { .steps li.active::before { animation: none; } }
+      .lead .top { align-items: center; }
+      .ident { display: flex; align-items: center; gap: 10px; min-width: 0; }
+      .logo { position: relative; flex: none; width: 32px; height: 32px; border-radius: 8px; background: var(--line); color: var(--muted); display: grid; place-items: center; font-weight: 700; font-size: 14px; overflow: hidden; }
+      .logo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #fff; padding: 4px; box-sizing: border-box; }
+      .score { display: grid; justify-items: end; gap: 4px; flex: none; }
+      .bar { width: 64px; height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+      .bar span { display: block; height: 100%; background: var(--muted); }
+      .fit-strong .bar span { background: var(--accent); }
+      .fit-maybe .bar span { background: #e0c97f; }
+      .lead.other { border-left-color: #8a8a8a; }
+      .empty { color: var(--muted); }
       .foot { margin-top: 24px; color: var(--muted); font-size: 13px; }
     </style>
   </head>
@@ -109,6 +131,8 @@
       </div>
 
       <form id="setup">
+        <label for="you">Your name</label>
+        <input id="you" placeholder="So it ignores your own voice" autocomplete="given-name" />
         <label for="company">Your company</label>
         <div class="row">
           <input id="company" placeholder="yourcompany.com" autocomplete="off" autocapitalize="off" spellcheck="false" />
@@ -117,6 +141,7 @@
         <label for="note">Focus (optional)</label>
         <input id="note" placeholder="e.g. Southeast Asia, mid-market" autocomplete="off" />
       </form>
+      <ol id="progress" class="steps" hidden></ol>
       <p id="status" role="status"></p>
 
       <section id="leads" hidden></section>

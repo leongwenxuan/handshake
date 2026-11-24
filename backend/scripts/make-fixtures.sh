@@ -18,4 +18,5 @@ make tom-agency Fred "Hey, Tom Becker. I run a small marketing agency, we do soc
 make karri-linear Daniel "Hi, I'm Karri Saarinen, I'm the CEO at Linear."
 make patrick-stripe Moira "Hey, Patrick Collison. I'm one of the founders of Stripe."
 make mia-student Karen "Hi! I'm Mia, I'm a student at NYU, just here to learn."
+make dan-hubspot Fred "Hi, Dan Ortiz, I run product at HubSpot."
 ls -la

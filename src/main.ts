@@ -1,9 +1,10 @@
 import { waitForEvenAppBridge, OsEventTypeList } from '@evenrealities/even_hub_sdk'
-import { showCard, showText, updateCardText, CARD_ACTIONS } from './glasses'
+import { showCard, showText, updateCard, updateCardText, CARD_ACTIONS } from './glasses'
 import { Capture, type StopReason } from './listen'
-import { BACKEND_URL, cardText, lookup, saveLead as saveToBackend, verify, type Check, type LookupResult } from './api'
+import { BACKEND_URL, lookup, saveLead as saveToBackend, verify, type Check, type LookupResult } from './api'
 
 // Flow: idle --tap--> listening --silence/tap--> thinking --> card --Save/Skip--> idle
+// If the lookup fails, the clip is kept: tap retries it without asking again.
 // The card shows at once, then fills in when the role check returns.
 // Double-tap: from idle exits the app; from anywhere else goes back to idle.
 
@@ -11,6 +12,7 @@ type State =
   | { kind: 'idle' }
   | { kind: 'listening'; capture: Capture }
   | { kind: 'thinking' }
+  | { kind: 'failed'; audio: Uint8Array<ArrayBuffer> }
   | CardState
 
 // roleCheck resolves to the final card and check, even after the card has
@@ -75,22 +77,29 @@ async function finishListening(capture: Capture, reason: StopReason) {
   console.log(`levels (x1000): ${capture.levelTrace}`)
 
   if (!capture.speech) return goIdle("Didn't catch that.")
+  await checkFit(capture.audio())
+}
 
+// Sends the clip for a card. On failure the clip stays in memory (only
+// until the next tap or double-tap) so the wearer can retry.
+async function checkFit(audio: Uint8Array<ArrayBuffer>) {
   const thinking: State = { kind: 'thinking' }
   state = thinking
   await showText(bridge, 'Checking fit...')
   const t0 = performance.now()
   try {
-    const result = await lookup(capture.audio())
+    const result = await lookup(audio)
     const roundTrip = Math.round(performance.now() - t0)
     console.log(`lookup ${roundTrip} ms round trip`, result.timings, `"${result.transcript}"`)
     if (state !== thinking) return // backed out, maybe already listening to someone else
+    if (result.only_wearer) return goIdle('Only heard you. Tap again as they start.')
     if (!result.card.name && !result.card.company) return goIdle("Didn't catch a name.")
-    const check: Check = result.card.company || result.card.company_domain ? 'pending' : 'off'
+    const checkable = (result.card.company || result.card.company_domain) && (result.card.relation ?? 'prospect') === 'prospect'
+    const check: Check = checkable ? 'pending' : 'off'
     const shown: CardState = { kind: 'card', result, check, roleCheck: null, saving: false }
     state = shown
     // Start the role check before Save can be tapped, so any Save waits for it.
-    const rendered = showCard(bridge, cardText(result.card, check))
+    const rendered = showCard(bridge, result.card, check)
     if (check === 'pending') shown.roleCheck = checkRole(shown, t0, rendered)
     await rendered
     // The simulator freezes a page that gets no events, so in fixture mode
@@ -99,7 +108,9 @@ async function finishListening(capture: Capture, reason: StopReason) {
     if (FIXTURE && check === 'pending' && state === shown) await bridge.audioControl(true)
   } catch (err) {
     console.error('lookup failed:', err)
-    if (state === thinking) await goIdle("Couldn't check fit.")
+    if (state !== thinking) return
+    state = { kind: 'failed', audio }
+    await showText(bridge, "Couldn't check fit.\n\nTap to try again (no need to ask them).\nDouble-tap to skip.")
   }
 }
 
@@ -122,7 +133,7 @@ async function checkRole(shown: CardState, t0: number, rendered: Promise<void>):
   if (state === shown) {
     shown.result = { ...shown.result, card }
     shown.check = check
-    await updateCardText(bridge, cardText(card, check))
+    await updateCard(bridge, card, check)
   }
   return { card, check }
 }
@@ -153,7 +164,8 @@ async function saveLead(shown: CardState) {
     const name = card.name ?? who
     const saved = await saveToBackend(card, typeof check === 'object' ? check : null, result.transcript)
     console.log(`lead sent in ${Math.round(performance.now() - t0)} ms`, saved)
-    if (saved.notion === 'saved') line = `Saved ${name} to Notion.${saved.drafted ? '\nFollow-up email drafted.' : ''}`
+    if (saved.notion === 'saved' && saved.again) line = `Met ${name} again: Notion updated.${saved.drafted ? '\nNew follow-up drafted.' : ''}`
+    else if (saved.notion === 'saved') line = `Saved ${name} to Notion.${saved.drafted ? '\nFollow-up email drafted.' : ''}`
     else if (saved.notion === 'failed') line = `Saved ${name}. Notion failed.`
     else if (saved.drafted) line = `Saved ${name}. Follow-up email drafted.`
   } catch (err) {
@@ -230,6 +242,7 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   if (!tapped) return
   if (state.kind === 'idle') void startListening()
   else if (state.kind === 'listening') state.capture.stop('tap')
+  else if (state.kind === 'failed') void checkFit(state.audio)
 })
 
 await goIdle()

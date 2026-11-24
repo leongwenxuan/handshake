@@ -23,6 +23,8 @@ export interface Profile {
   icp: { industries: string[]; company_size: string; stage: string; regions: string[]; signals: string[] }
   buyers: Buyer[]
   not_a_fit: string[]
+  competitors?: string[] // missing in profiles built before it existed
+  you?: string | null // the wearer's name, so the scorer can ignore their voice
   note: string | null
   sources: { website: boolean; treg: boolean }
   created_at: string
@@ -37,7 +39,7 @@ const strings = { type: 'array', items: { type: 'string' } }
 const PROFILE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['company', 'one_liner', 'problem', 'solution', 'icp', 'buyers', 'not_a_fit'],
+  required: ['company', 'one_liner', 'problem', 'solution', 'icp', 'buyers', 'not_a_fit', 'competitors'],
   properties: {
     company: { type: 'string', description: 'Company name as it brands itself' },
     one_liner: { type: 'string', description: 'What it sells and to whom, at most 90 characters' },
@@ -72,6 +74,7 @@ const PROFILE_SCHEMA = {
       },
     },
     not_a_fit: { ...strings, description: '2-4 kinds of people or companies that look close but will not buy' },
+    competitors: { ...strings, description: '3-6 direct competitors: company names only, best known first' },
   },
 }
 
@@ -112,7 +115,18 @@ async function readSite(domain: string): Promise<string | null> {
   }
 }
 
-export async function buildProfile(input: string, note: string | null, deps: { openaiKey: string; treg: Treg | null }): Promise<Profile> {
+// Progress for the setup screen, in the order the steps happen.
+export type SetupStep =
+  | { step: 'company'; found: boolean; detail: string | null }
+  | { step: 'site'; found: boolean; detail: string | null }
+  | { step: 'profile' }
+
+export async function buildProfile(
+  input: string,
+  note: string | null,
+  deps: { openaiKey: string; treg: Treg | null },
+  onStep: (s: SetupStep) => void = () => {},
+): Promise<Profile> {
   let domain = toDomain(input)
   const t0 = performance.now()
 
@@ -122,11 +136,17 @@ export async function buildProfile(input: string, note: string | null, deps: { o
     : Promise.resolve(null)
   let siteP = domain ? readSite(domain) : null
   const company = await companyP
+  onStep({
+    step: 'company',
+    found: !!company,
+    detail: company ? [company.name, company.industry, company.employees && `${company.employees.toLocaleString()} people`].filter(Boolean).join(' · ') : null,
+  })
   if (!domain && company?.domain) {
     domain = company.domain
     siteP = readSite(domain)
   }
   const site = siteP ? await siteP : null
+  onStep({ step: 'site', found: !!site, detail: domain })
   console.log(`profile sources for "${input}": domain=${domain} treg=${!!company} site=${site?.length ?? 0} chars, ${Math.round(performance.now() - t0)} ms`)
 
   if (!company && !site && !domain) {
@@ -146,6 +166,7 @@ export async function buildProfile(input: string, note: string | null, deps: { o
     .filter(Boolean)
     .join('\n\n')
 
+  onStep({ step: 'profile' })
   const out = await chatJSON<Omit<Profile, 'domain' | 'note' | 'sources' | 'created_at'>>(deps.openaiKey, {
     system: SYSTEM,
     user: material,
@@ -191,5 +212,9 @@ export function profileText(p: Profile | null): string {
     'Buyer roles (labels to use for "buyer"):',
     ...p.buyers.map(b => `- "${b.role}" (${kind[b.kind]}): titles like ${b.titles.join(', ')}. Cares because ${b.why} Pain: ${b.pain}.`),
     `Not a fit: ${p.not_a_fit.join('; ')}`,
-  ].join('\n')
+    p.competitors?.length ? `Competitors: ${p.competitors.join(', ')}` : null,
+    p.you ? `The wearer is ${p.you} from ${p.company}.` : null,
+  ]
+    .filter(Boolean)
+    .join('\n')
 }

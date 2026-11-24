@@ -3,11 +3,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { whisperLocal } from './stt.ts'
 import { mockScorer } from './score.ts'
 import { openaiScorer, openaiTranscriber } from './openai.ts'
-import { buildProfile, loadProfile, profileText, saveProfile, type Profile } from './profile.ts'
+import { buildProfile, loadProfile, profileText, saveProfile, toDomain, type Profile } from './profile.ts'
 import { treg as makeTreg } from './treg.ts'
-import { factsText, verify } from './verify.ts'
+import { factsText, similarity, verify } from './verify.ts'
 import type { Card } from './score.ts'
-import { appendLead, draftFollowUp, readLeads, type Lead } from './leads.ts'
+import { appendLead, draftFollowUp, findSame, readLeads, type Lead } from './leads.ts'
 import { notion as makeNotion } from './notion.ts'
 import type { Verification } from './verify.ts'
 
@@ -33,8 +33,36 @@ const treg = TREG_API_KEY ? makeTreg(TREG_API_KEY) : null
 const notion = NOTION_TOKEN ? makeNotion(NOTION_TOKEN) : null
 // OpenAI transcription hears names far better than local Whisper base
 // ("Patrick Collison" vs "Patrick Carlson"), which the role check depends on.
-const transcriber = process.env.STT !== 'whisper' && OPENAI_API_KEY ? openaiTranscriber(OPENAI_API_KEY) : whisperLocal()
-const scorer = OPENAI_API_KEY ? openaiScorer(OPENAI_API_KEY, () => profileText(profile)) : mockScorer()
+const transcriber = process.env.STT !== 'whisper' && OPENAI_API_KEY ? openaiTranscriber(OPENAI_API_KEY, () => (profile ? `The listener is ${profile.you ? `${profile.you} from ` : 'from '}${profile.company}.` : null)) : whisperLocal()
+const baseScorer = OPENAI_API_KEY ? openaiScorer(OPENAI_API_KEY, () => profileText(profile)) : mockScorer()
+// A competitor card only when the model names a company that really is on
+// the profile's competitor list: the model alone calls too many software
+// companies competitors, and a missed pitch costs more than a missed label.
+const scorer = {
+  name: baseScorer.name,
+  async score(transcript: string, facts?: string): Promise<Card> {
+    const card = await baseScorer.score(transcript, facts)
+    const key = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+    const listed = card.competitor && profile?.competitors?.some(c => key(c) === key(card.competitor!))
+    if (!listed) return { ...card, competitor: null }
+    return { ...card, relation: 'competitor', fit: 'unknown', score: null, buyer: null }
+  },
+}
+
+// "attio.com", "https://attio.com/" and "Attio" all name the current profile.
+function sameCompany(p: Profile, input: string) {
+  const d = toDomain(input)
+  return d ? d === p.domain : input.trim().toLowerCase() === p.company.toLowerCase()
+}
+
+// The card is about the wearer: their first name, and their own company
+// (or no company at all).
+function isWearer(card: Card) {
+  const you = profile?.you?.trim().toLowerCase().split(/\s+/)[0]
+  const first = card.name?.trim().toLowerCase().split(/\s+/)[0]
+  if (!you || first !== you) return false
+  return card.relation === 'colleague' || !card.company || similarity(card.company, profile!.company) > 0.8
+}
 
 function cors(res: ServerResponse) {
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -79,17 +107,33 @@ const server = createServer(async (req, res) => {
     return json(res, 200, { profile })
   }
 
+  // Builds the profile, streaming progress as JSON lines ({step}, then
+  // {profile} or {error}). With only: 'you', just your name changes.
   if (req.method === 'POST' && req.url === '/profile') {
+    let streaming = false
     try {
-      const { company, note } = JSON.parse((await readBody(req, 10_000)).toString() || '{}') as { company?: string; note?: string }
-      if (!company?.trim()) return json(res, 400, { error: 'Type your company name or website.' })
+      const body = JSON.parse((await readBody(req, 10_000)).toString() || '{}') as { company?: string; note?: string; you?: string; only?: 'you' }
+      const company = body.company?.trim()
+      const note = body.note?.trim() || null
+      const you = body.you?.trim() || null
+      if (!company) return json(res, 400, { error: 'Type your company name or website.' })
+      if (body.only === 'you' && profile && sameCompany(profile, company)) {
+        profile = { ...profile, you }
+        saveProfile(profile)
+        return json(res, 200, { profile })
+      }
       if (!OPENAI_API_KEY) return json(res, 503, { error: 'Set OPENAI_API_KEY in backend/.env first.' })
-      const built = await buildProfile(company, note?.trim() || null, { openaiKey: OPENAI_API_KEY, treg })
-      profile = built
-      saveProfile(built)
-      return json(res, 200, { profile })
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache' })
+      streaming = true
+      const send = (o: object) => res.write(`${JSON.stringify(o)}\n`)
+      const built = await buildProfile(company, note, { openaiKey: OPENAI_API_KEY, treg }, send)
+      profile = { ...built, you }
+      saveProfile(profile)
+      send({ profile })
+      return res.end()
     } catch (err) {
       console.error('profile failed:', err)
+      if (streaming) return res.end(`${JSON.stringify({ error: (err as Error).message })}\n`)
       return json(res, 500, { error: (err as Error).message })
     }
   }
@@ -103,7 +147,13 @@ const server = createServer(async (req, res) => {
       const t1 = performance.now()
       const transcript = await transcriber.transcribe(pcm)
       const t2 = performance.now()
-      const card = await scorer.score(transcript)
+      let card = await scorer.score(transcript)
+      // Only the wearer was heard (they introduced themselves first and the
+      // capture ended): that's not a lead.
+      const you = profile?.you?.trim().split(/\s+/)[0]
+      const onlyWearer =
+        isWearer(card) || (!card.name && !card.company && !!you && new RegExp(`\\b${you.replace(/[^\p{L}]/gu, '')}\\b`, 'i').test(transcript))
+      if (onlyWearer) card = { ...card, name: null, company: null, company_domain: null }
       const t3 = performance.now()
 
       const timings = {
@@ -113,7 +163,7 @@ const server = createServer(async (req, res) => {
         server_ms: Math.round(t3 - t0),
       }
       console.log(`lookup ${JSON.stringify(timings)} "${transcript}"`)
-      return json(res, 200, { card, transcript, timings })
+      return json(res, 200, { card, transcript, timings, only_wearer: onlyWearer })
     } catch (err) {
       console.error('lookup failed:', err)
       return json(res, 500, { error: (err as Error).message })
@@ -125,7 +175,7 @@ const server = createServer(async (req, res) => {
     try {
       const { transcript, card } = JSON.parse((await readBody(req, 20_000)).toString() || '{}') as { transcript?: string; card?: Card }
       if (!card || typeof transcript !== 'string') return json(res, 400, { error: 'need transcript and card' })
-      if (!treg) return json(res, 200, { card, verification: null, timings: { server_ms: 0 } })
+      if (!treg || (card.relation && card.relation !== 'prospect')) return json(res, 200, { card, verification: null, timings: { server_ms: 0 } })
 
       const verification = await verify(card, profile, treg)
       const t1 = performance.now()
@@ -173,14 +223,19 @@ const server = createServer(async (req, res) => {
         transcript?: string
       }
       if (!body.card || typeof body.transcript !== 'string') return json(res, 400, { error: 'need card and transcript' })
+      const verification = body.verification ?? null
+      // Met before: update that lead (and its Notion row) instead of adding one.
+      const before = findSame(readLeads(), { card: body.card, verification })
       const lead: Lead = {
-        id: crypto.randomUUID(),
+        id: before?.id ?? crypto.randomUUID(),
         card: body.card,
-        verification: body.verification ?? null,
+        verification,
         transcript: body.transcript,
         savedAt: new Date().toISOString(),
         followUp: null,
-        notion: null,
+        notion: before?.notion ?? null,
+        meetings: (before?.meetings ?? (before ? 1 : 0)) + 1,
+        firstMet: before?.firstMet ?? before?.savedAt ?? undefined,
       }
       appendLead(lead) // kept even if the steps below fail
       if (OPENAI_API_KEY) {
@@ -192,17 +247,18 @@ const server = createServer(async (req, res) => {
       const t1 = performance.now()
       let notionError: string | null = null
       if (notion) {
-        lead.notion = await notion.addLead(lead).catch(err => {
+        const existing = lead.notion
+        lead.notion = await (existing ? notion.updateLead(existing.id, lead).then(() => existing) : notion.addLead(lead)).catch(err => {
           console.error('notion save failed:', err)
           notionError = (err as Error).message
-          return null
+          return existing
         })
       }
       appendLead(lead)
       const t2 = performance.now()
       const timings = { draft_ms: Math.round(t1 - t0), notion_ms: Math.round(t2 - t1), server_ms: Math.round(t2 - t0) }
       console.log(`lead ${JSON.stringify(timings)} ${lead.card.name ?? '-'} notion=${lead.notion ? 'ok' : notion ? 'failed' : 'off'}`)
-      return json(res, 200, { lead, notion: notion ? (lead.notion ? 'saved' : 'failed') : 'off', notionError, drafted: !!lead.followUp, timings })
+      return json(res, 200, { lead, notion: notion ? (notionError ? 'failed' : 'saved') : 'off', notionError, again: !!before, drafted: !!lead.followUp, timings })
     } catch (err) {
       console.error('save lead failed:', err)
       return json(res, 500, { error: (err as Error).message })

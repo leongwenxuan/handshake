@@ -5,6 +5,8 @@ export interface Card {
   company_domain: string | null // only when the model is confident which company it is
   role: string | null
   checked_title: string | null // database title, when consistent with what they said
+  relation: 'prospect' | 'colleague' | 'competitor' // competitor is set by the server from the profile's list
+  competitor?: string | null // which listed competitor the model matched
   company_fit: 'yes' | 'no' | 'unknown'
   buyer: string | null // which buyer role from the profile they match
   fit: 'strong' | 'maybe' | 'weak' | 'unknown'
@@ -30,7 +32,7 @@ export function mockScorer(): Scorer {
       const name = match(t, /\b(?:I'm|I am|my name is|this is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/)
       const company = match(t, /\b(?:at|from|with)\s+([A-Z][A-Za-z0-9&]+(?:\s+[A-Z][A-Za-z0-9&]+)?)/)
       const role = match(t, /\b(?:I run|I lead|I head|I'm the|I am the|I work in|I do)\s+([a-z][a-z ]{2,30}?)(?=\s+(?:at|for|from|with)\b|$)/i)
-      const unchecked = { company_domain: null, checked_title: null, company_fit: 'unknown', buyer: null } as const
+      const unchecked = { company_domain: null, checked_title: null, relation: 'prospect', competitor: null, company_fit: 'unknown', buyer: null } as const
       if (!name && !company) {
         return {
           ...unchecked, name: null, company: null, role: null, fit: 'unknown', score: null,

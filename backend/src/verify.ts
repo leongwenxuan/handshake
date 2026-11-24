@@ -48,6 +48,7 @@ function bareName(s: string) {
 export async function verify(card: Card, profile: Profile | null, treg: Treg): Promise<Verification> {
   const empty: Verification = { company: null, person: null, contact: null }
   if (!card.company && !card.company_domain) return empty
+  if (card.relation && card.relation !== 'prospect') return empty // colleagues and competitors aren't checked
 
   // Who to ask for, when they aren't a buyer but their company could be.
   const buyer = profile?.buyers.find(b => b.kind === 'decision_maker') ?? profile?.buyers[0]
@@ -135,7 +136,7 @@ function bestNameMatch(heard: string, rows: Person[], domain: string): Verificat
   const h = normalize(heard)
   const [hFirst, ...hRest] = h.split(' ')
   const hLast = hRest.join(' ')
-  let best: { row: Person; score: number } | null = null
+  const matches: { row: Person; score: number }[] = []
   for (const row of rows) {
     if (!row.name || (row.company_domain && row.company_domain !== domain)) continue
     const n = normalize(stripSuffix(row.name))
@@ -148,9 +149,19 @@ function bestNameMatch(heard: string, rows: Person[], domain: string): Verificat
       // First names must be close; last names may be misheard ("Chan" for "Chen").
       score = similarity(hFirst, nFirst) >= 0.85 ? 0.4 * similarity(hFirst, nFirst) + 0.6 * similarity(hLast, nLast) : 0
     }
-    if (score >= 0.85 && (!best || score > best.score)) best = { row, score }
+    if (score >= 0.85) matches.push({ row, score })
   }
-  if (!best) return null
+  if (!matches.length) return null
+  // Two different people match ("John Smith" at a big company): don't guess.
+  // The same person often comes back from several providers with different
+  // title wording, so only distinct profile links count as different people.
+  const slug = (url: string) => url.toLowerCase().replace(/[?#].*$/, '').replace(/\/+$/, '').split('/').pop()
+  const people = new Set(matches.flatMap(m => (m.row.profile_url ? [slug(m.row.profile_url)] : [])))
+  if (people.size > 1) {
+    console.log(`name match ambiguous for "${heard}": ${matches.map(m => `${m.row.name} (${m.row.title})`).join('; ')}`)
+    return null
+  }
+  const best = matches.reduce((a, b) => (b.score > a.score ? b : a))
   return {
     name: stripSuffix(best.row.name),
     title: best.row.title,

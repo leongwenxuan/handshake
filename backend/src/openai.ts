@@ -36,7 +36,7 @@ export async function chatJSON<T>(
 const CARD_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['name', 'company', 'company_domain', 'role', 'checked_title', 'company_fit', 'buyer', 'fit', 'score', 'why', 'opener'],
+  required: ['name', 'company', 'company_domain', 'role', 'checked_title', 'relation', 'competitor', 'company_fit', 'buyer', 'fit', 'score', 'why', 'opener'],
   properties: {
     name: { type: ['string', 'null'], description: "The other person's name as they said it, or null" },
     company: { type: ['string', 'null'], description: 'Their company, or null' },
@@ -49,6 +49,11 @@ const CARD_SCHEMA = {
       type: ['string', 'null'],
       description:
         'Only when checked facts are given: their job title from the facts, if it is consistent with what they said about their role. Null if it conflicts (it may be a different person with the same name) or there are no facts',
+    },
+    relation: { type: 'string', enum: ['prospect', 'colleague'], description: "colleague: works at the wearer's company. Otherwise prospect" },
+    competitor: {
+      type: ['string', 'null'],
+      description: "Only if their company is in the profile's Competitors list: that name exactly as written there. Otherwise null",
     },
     company_fit: {
       type: 'string',
@@ -69,7 +74,7 @@ const CARD_SCHEMA = {
 function instructions(profile: string) {
   return `You help someone at an in-person event decide, in one glance, whether the person who just introduced themselves is a potential customer for the wearer's company. The result is shown on smart glasses with a tiny monochrome display, so every field must be short.
 
-The transcript is a few seconds of audio from a noisy room, recorded right after a handshake. It may include the wearer's own voice, filler, or misheard words.
+The transcript is a few seconds of audio from a noisy room, recorded right after a handshake. It may include the wearer's own voice (they may introduce themselves too), filler, or misheard words. Never score the wearer: the card is about the other person. If only the wearer is heard, return nulls for name and company.
 
 Rules:
 - Use only what the person said about themselves, plus well-known public facts about large, famous companies (size, industry). Never invent facts about a company you don't recognise; judge it from what they said it does.
@@ -80,6 +85,8 @@ Rules:
 - Use fit "unknown" and score null only when you cannot tell their role and have no idea what their company does. Then the opener is a qualifying question that would settle it.
 - Fix an obvious mishearing of a famous company name (for example "Stride" said in a fintech context is probably "Stripe") only when you are confident. Keep personal names as heard.
 - If no name or company was said, return nulls for them and fit "unknown".
+- A colleague is not a prospect: set fit "unknown", score null and buyer null, and keep the opener friendly.
+- If they work at a listed competitor, still fill the other fields, but the opener asks what they're seeing in the market (e.g. "Ask: What are buyers asking for lately?"), never pitches.
 - Checked facts, when given, come from a business database looked up by the name and company you heard. Trust them for company size and industry. A person row may be someone else with the same name: use their title only if it fits what they said (a "Cofounder" title fits "one of the founders"; "Software Engineer" does not fit "I run partnerships"). If it conflicts, ignore that row and trust what they said.
 - "why" is at most 45 characters, in whole words: shorten the phrase rather than cutting a word off. "opener" starts with "Ask: " and is at most 60 characters, specific to them and to what the wearer sells.
 
@@ -102,7 +109,13 @@ export function openaiScorer(apiKey: string, profile: () => string, model = DEFA
   }
 }
 
-export function openaiTranscriber(apiKey: string, model = process.env.OPENAI_STT_MODEL || 'gpt-4o-transcribe'): Transcriber {
+// hint(): extra context for the prompt, such as the wearer's name and
+// company, which the clip often starts with and which are easy to mishear.
+export function openaiTranscriber(
+  apiKey: string,
+  hint: () => string | null = () => null,
+  model = process.env.OPENAI_STT_MODEL || 'gpt-4o-transcribe',
+): Transcriber {
   return {
     name: `OpenAI ${model}`,
     async transcribe(pcm) {
@@ -110,7 +123,7 @@ export function openaiTranscriber(apiKey: string, model = process.env.OPENAI_STT
       form.append('file', new Blob([new Uint8Array(pcmToWav(pcm))], { type: 'audio/wav' }), 'clip.wav')
       form.append('model', model)
       form.append('language', 'en')
-      form.append('prompt', 'A person introducing themselves at a business event: name, role, company.')
+      form.append('prompt', ['A person introducing themselves at a business event: name, role, company.', hint()].filter(Boolean).join(' '))
       const res = await fetch(`${API}/audio/transcriptions`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}` },
