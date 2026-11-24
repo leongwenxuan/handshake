@@ -17,6 +17,7 @@ interface Lead {
 const section = document.getElementById('leads') as HTMLElement
 const FIT_ORDER = { strong: 0, maybe: 1, weak: 2, unknown: 3 }
 let shown = ''
+let known: Set<string> | null = null // lead ids already on screen; null before the first load
 
 function esc(s: string) {
   return s.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)
@@ -36,7 +37,7 @@ function summary(leads: Lead[]) {
   return parts.join(' · ')
 }
 
-function leadHTML(l: Lead, i: number) {
+function leadHTML(l: Lead, i: number, fresh: boolean) {
   const { card, verification: v } = l
   const company = v?.company?.name ?? card.company
   const time = new Date(l.savedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
@@ -48,7 +49,7 @@ function leadHTML(l: Lead, i: number) {
   ].filter(Boolean)
   const email = l.followUp
   const mailto = email ? `mailto:?subject=${encodeURIComponent(email.subject)}&body=${encodeURIComponent(email.body)}` : null
-  return `<article class="lead card fit-${card.fit}">
+  return `<article class="lead card fit-${card.fit}${fresh ? ' new' : ''}">
     <div class="top">
       <div><span class="who">${esc(card.name ?? 'Unknown')}</span>${company ? `<span class="at">${esc(company)}</span>` : ''}</div>
       <span class="badge">${verdict}</span>
@@ -58,21 +59,18 @@ function leadHTML(l: Lead, i: number) {
     ${v?.contact ? `<p class="ask">Ask for ${esc(v.contact.name)}${v.contact.title ? `, ${esc(v.contact.title)}` : ''}</p>` : ''}
     ${
       email
-        ? `<details>
+        ? `<details${fresh ? ' open' : ''}>
             <summary>Follow-up email</summary>
             <p class="subject">${esc(email.subject)}</p>
             <pre id="mail-${i}">${esc(email.body)}</pre>
             <div class="actions">
               <button type="button" data-copy="${i}">Copy</button>
               <a class="btn" href="${mailto}">Open in Mail</a>
-              ${l.notion ? `<a class="btn" href="${esc(l.notion.url)}" target="_blank" rel="noopener">Notion</a>` : ''}
             </div>
           </details>`
-        : l.notion
-          ? `<div class="actions"><a class="btn" href="${esc(l.notion.url)}" target="_blank" rel="noopener">Notion</a></div>`
-          : ''
+        : ''
     }
-    <p class="time">Met ${time}</p>
+    <div class="meta"><span>Met ${time}</span>${l.notion ? `<a href="${esc(l.notion.url)}" target="_blank" rel="noopener">Open in Notion</a>` : ''}</div>
   </article>`
 }
 
@@ -92,10 +90,14 @@ async function refresh() {
     return
   }
   const sorted = sortLeads(leads)
+  // A lead that arrived while the page was open is outlined with its email
+  // open, so a save on the glasses visibly lands here.
+  const fresh = new Set(known ? leads.filter(l => !known!.has(l.id)).map(l => l.id) : [])
+  known = new Set(leads.map(l => l.id))
   section.hidden = false
   section.innerHTML = `<h2>People you met</h2>
     <p class="summary">${summary(leads)}</p>
-    <div class="leads">${sorted.map(leadHTML).join('')}</div>`
+    <div class="leads">${sorted.map((l, i) => leadHTML(l, i, fresh.has(l.id))).join('')}</div>`
   section.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach(button => {
     button.addEventListener('click', async () => {
       const lead = sorted[Number(button.dataset.copy)]

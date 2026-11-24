@@ -44,6 +44,7 @@ export async function lookup(pcm: Uint8Array<ArrayBuffer>): Promise<LookupResult
     method: 'POST',
     headers: { 'Content-Type': 'application/octet-stream' },
     body: pcm,
+    signal: AbortSignal.timeout(12000), // the wearer is waiting on "Checking fit..."
   })
   if (!res.ok) throw new Error(`backend ${res.status}: ${await res.text()}`)
   return res.json()
@@ -54,6 +55,7 @@ export async function verify(transcript: string, card: Card): Promise<VerifyResu
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ transcript, card }),
+    signal: AbortSignal.timeout(10000), // on failure the card just drops "Checking role..."
   })
   if (!res.ok) throw new Error(`backend ${res.status}: ${await res.text()}`)
   return res.json()
@@ -62,6 +64,7 @@ export async function verify(transcript: string, card: Card): Promise<VerifyResu
 export interface SaveResult {
   notion: 'saved' | 'failed' | 'off'
   notionError: string | null
+  drafted: boolean
 }
 
 export async function saveLead(card: Card, verification: Verification | null, transcript: string): Promise<SaveResult> {
@@ -75,24 +78,31 @@ export async function saveLead(card: Card, verification: Verification | null, tr
   return res.json()
 }
 
+// Shortens to max characters at a word boundary, so nothing ends mid-word.
 function clip(s: string, max: number) {
-  return s.length > max ? `${s.slice(0, max - 3).trimEnd()}...` : s
+  if (s.length <= max) return s
+  const cut = s.slice(0, max - 3)
+  const space = cut.lastIndexOf(' ')
+  return `${(space > max / 2 ? cut.slice(0, space) : cut).replace(/[\s,;:.-]+$/, '')}...`
 }
 
-// Formats the card for the 576x288 display: short lines, most important first.
+// Formats the card for the 576x288 display, most important first:
+//   who / verdict / what to say / role check / why
+// The role-check line sits below what to say, so when it fills in, the
+// lines the wearer is reading don't move.
 export function cardText(card: Card, check: Check): string {
   const who = [card.name ?? 'Unknown', card.company].filter(Boolean).join(', ')
   const verdict =
     card.fit === 'unknown' || card.score === null
       ? 'NOT SURE'
-      : `${card.fit.toUpperCase()} FIT ${card.score}/10${card.buyer ? ` - ${card.buyer}` : ''}`
-  const lines = [who, verdict]
+      : `${card.fit.toUpperCase()} ${card.score}/10${card.buyer ? ` - Buyer: ${card.buyer}` : ''}`
+  const lines = [clip(who, 48), clip(verdict, 48), clip(card.opener, 60)]
   if (check === 'pending') lines.push('Checking role...')
   else if (check !== 'off') {
-    if (check.person && card.checked_title) lines.push(clip(`Verified: ${card.checked_title}`, 48))
-    else if (check.company) lines.push('Role not verified')
     if (check.contact) lines.push(clip(`Buyer there: ${check.contact.name} (${check.contact.buyer})`, 48))
+    else if (check.person && card.checked_title) lines.push(clip(`Verified: ${card.checked_title}`, 48))
+    else if (card.buyer && check.company) lines.push('Role not verified') // only matters if they claim a buyer role
   }
-  lines.push(card.why, card.opener)
+  lines.push(clip(card.why, 48))
   return lines.join('\n')
 }

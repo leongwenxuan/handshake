@@ -23,6 +23,21 @@ const noteInput = $<HTMLInputElement>('note')
 const button = $<HTMLButtonElement>('build')
 const status = $<HTMLParagraphElement>('status')
 const section = $<HTMLElement>('profile')
+const current = $<HTMLDivElement>('current')
+
+// Once a profile exists, setup shrinks to one line so the leads come first.
+function collapse(p: Profile) {
+  $('current-name').textContent = p.company
+  $('current-domain').textContent = p.domain ?? ''
+  current.hidden = false
+  form.hidden = true
+}
+
+$('change').addEventListener('click', () => {
+  current.hidden = true
+  form.hidden = false
+  companyInput.focus()
+})
 
 const KIND = { decision_maker: 'Decision maker', champion: 'Champion', user: 'User' }
 
@@ -82,6 +97,7 @@ async function loadExisting() {
     companyInput.value = profile.domain ?? profile.company
     noteInput.value = profile.note ?? ''
     render(profile)
+    collapse(profile)
   } catch {
     setStatus(`Can't reach the backend at ${BACKEND_URL}.`, true)
   }
@@ -102,7 +118,8 @@ form.addEventListener('submit', async e => {
     const body = (await res.json()) as { profile?: Profile; error?: string }
     if (!res.ok || !body.profile) throw new Error(body.error ?? `backend ${res.status}`)
     render(body.profile)
-    setStatus('Ready. Tap the ring when someone introduces themselves.')
+    collapse(body.profile)
+    setStatus('Ready. Tap the ring as someone starts introducing themselves.')
   } catch (err) {
     setStatus((err as Error).message, true)
   } finally {

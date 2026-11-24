@@ -140,6 +140,13 @@ const server = createServer(async (req, res) => {
           verification.person = null
           updated.checked_title = null
         }
+        // Only suggest asking for someone else if the final verdict says
+        // this person isn't the buyer and their company could be.
+        if (updated.buyer || updated.company_fit === 'no') verification.contact = null
+        // The card updates in place while the wearer reads it: keep the lines
+        // that didn't need to change so only the new facts move.
+        if (updated.fit === card.fit) updated.why = card.why
+        if (!verification.contact && updated.fit === card.fit) updated.opener = card.opener
       }
       const t2 = performance.now()
       const timings = { lookup_ms: Math.round(t1 - t0), rescore_ms: Math.round(t2 - t1), server_ms: Math.round(t2 - t0) }
@@ -193,7 +200,7 @@ const server = createServer(async (req, res) => {
       const t2 = performance.now()
       const timings = { draft_ms: Math.round(t1 - t0), notion_ms: Math.round(t2 - t1), server_ms: Math.round(t2 - t0) }
       console.log(`lead ${JSON.stringify(timings)} ${lead.card.name ?? '-'} notion=${lead.notion ? 'ok' : notion ? 'failed' : 'off'}`)
-      return json(res, 200, { lead, notion: notion ? (lead.notion ? 'saved' : 'failed') : 'off', notionError, timings })
+      return json(res, 200, { lead, notion: notion ? (lead.notion ? 'saved' : 'failed') : 'off', notionError, drafted: !!lead.followUp, timings })
     } catch (err) {
       console.error('save lead failed:', err)
       return json(res, 500, { error: (err as Error).message })

@@ -11,17 +11,24 @@ type State =
   | { kind: 'idle' }
   | { kind: 'listening'; capture: Capture }
   | { kind: 'thinking' }
-  | { kind: 'card'; result: LookupResult; check: Check }
+  | CardState
+
+// roleCheck resolves to the final card and check, even after the card has
+// left the screen, so a Save tapped early still gets the verified details.
+type CardState = { kind: 'card'; result: LookupResult; check: Check; roleCheck: Promise<Final> | null; saving: boolean }
+type Final = { card: LookupResult['card']; check: Check }
 
 const bridge = await waitForEvenAppBridge()
 let state: State = { kind: 'idle' }
 
-const IDLE_TEXT = 'Handshake\n\nTap when someone introduces themselves.'
+// People say their name in the first second, so tap as they start.
+const HINT = 'Tap as someone starts introducing themselves.\nDouble-tap to exit.'
+const idleText = (message?: string) => (message ? `${message}\n\n${HINT}` : `Handshake\n\n${HINT}`)
 
 async function goIdle(message?: string) {
   if (FIXTURE && state.kind === 'card') void bridge.audioControl(false)
   state = { kind: 'idle' }
-  await showText(bridge, message ? `${message}\n\n${IDLE_TEXT}` : IDLE_TEXT)
+  await showText(bridge, idleText(message))
 }
 
 // Dev only: ?fixture=<name> plays backend/fixtures/<name>.wav into the
@@ -31,7 +38,10 @@ const FIXTURE = import.meta.env.DEV ? new URLSearchParams(location.search).get('
 async function startListening() {
   const capture = new Capture(reason => void finishListening(capture, reason))
   state = { kind: 'listening', capture }
-  await showText(bridge, 'Listening...\n\nTap when they finish.')
+  await showText(bridge, 'Listening...\n\nStops when they pause.\nTap to finish now. Double-tap to cancel.')
+  // The capture's own limits count audio chunks; this covers a mic that
+  // never starts sending them.
+  setTimeout(() => capture.stop('max'), 15000)
   if (FIXTURE) return void playFixture(FIXTURE, capture)
   await bridge.audioControl(true)
 }
@@ -65,33 +75,34 @@ async function finishListening(capture: Capture, reason: StopReason) {
 
   if (!capture.speech) return goIdle("Didn't catch that.")
 
-  state = { kind: 'thinking' }
+  const thinking: State = { kind: 'thinking' }
+  state = thinking
   await showText(bridge, 'Checking fit...')
   const t0 = performance.now()
   try {
     const result = await lookup(capture.audio())
     const roundTrip = Math.round(performance.now() - t0)
     console.log(`lookup ${roundTrip} ms round trip`, result.timings, `"${result.transcript}"`)
-    if (state.kind !== 'thinking') return // user backed out
-    if (!result.card.name && !result.card.company) return goIdle("Didn't catch a name. Tap to try again.")
+    if (state !== thinking) return // backed out, maybe already listening to someone else
+    if (!result.card.name && !result.card.company) return goIdle("Didn't catch a name.")
     const check: Check = result.card.company || result.card.company_domain ? 'pending' : 'off'
-    const shown: State = { kind: 'card', result, check }
+    const shown: CardState = { kind: 'card', result, check, roleCheck: null, saving: false }
     state = shown
     await showCard(bridge, cardText(result.card, check))
     // The simulator freezes a page that gets no events, so in fixture mode
     // keep mic events flowing while the card waits for the role check.
     // They're ignored outside listening; goIdle turns the mic off.
     if (FIXTURE && check === 'pending') await bridge.audioControl(true)
-    if (check === 'pending') void checkRole(shown, t0)
+    if (check === 'pending') shown.roleCheck = checkRole(shown, t0)
   } catch (err) {
     console.error('lookup failed:', err)
-    if (state.kind === 'thinking') await goIdle('Lookup failed. Try again.')
+    if (state === thinking) await goIdle("Couldn't check fit.")
   }
 }
 
 // Second pass: verify their role and find who to ask for, then update the
 // card in place if it's still on screen.
-async function checkRole(shown: Extract<State, { kind: 'card' }>, t0: number) {
+async function checkRole(shown: CardState, t0: number): Promise<Final> {
   let check: Check = 'off'
   let card = shown.result.card
   try {
@@ -104,39 +115,48 @@ async function checkRole(shown: Extract<State, { kind: 'card' }>, t0: number) {
   } catch (err) {
     console.error('verify failed:', err)
   }
-  if (state !== shown) return // saved, skipped or backed out meanwhile
-  shown.result = { ...shown.result, card }
-  shown.check = check
-  await updateCardText(bridge, cardText(card, check))
+  if (state === shown) {
+    shown.result = { ...shown.result, card }
+    shown.check = check
+    await updateCardText(bridge, cardText(card, check))
+  }
+  return { card, check }
 }
 
 // Saves on the glasses first, so a lead is never lost, then sends it to the
-// backend, which drafts a follow-up email and adds both to Notion. The idle
-// screen shows at once and its first line updates when that finishes.
-async function saveLead(result: LookupResult, check: Check) {
-  const verification = typeof check === 'object' ? check : null
+// backend, which drafts a follow-up email and adds both to Notion. The home
+// screen shows at once and its first line updates when that finishes. A
+// Save tapped while the role check runs waits for it before sending.
+async function saveLead(shown: CardState) {
+  if (shown.saving) return
+  shown.saving = true
+  const { result } = shown
   const leads = await loadLeads()
-  leads.push({ ...result.card, verification, transcript: result.transcript, savedAt: new Date().toISOString() })
+  leads.push({ ...result.card, transcript: result.transcript, savedAt: new Date().toISOString() })
   await bridge.setLocalStorage('leads', JSON.stringify(leads))
   console.log(`saved lead #${leads.length}`, result.card)
 
   const who = result.card.name ?? 'lead'
-  await goIdle(`Saved ${who}. Adding to CRM...`)
+  await goIdle(`Saved ${who}. Syncing...`)
   const idle = state
   if (FIXTURE) await bridge.audioControl(true) // keep the simulator awake (see above)
   let line = `Saved ${who}.`
   try {
     const t0 = performance.now()
-    const saved = await saveToBackend(result.card, verification, result.transcript)
+    const { card, check } = shown.roleCheck ? await shown.roleCheck : { card: result.card, check: shown.check }
+    const name = card.name ?? who
+    const saved = await saveToBackend(card, typeof check === 'object' ? check : null, result.transcript)
     console.log(`lead sent in ${Math.round(performance.now() - t0)} ms`, saved)
-    if (saved.notion === 'saved') line = `Saved ${who} to Notion.\nFollow-up email drafted.`
-    else if (saved.notion === 'failed') line = `Saved ${who}. Notion failed.`
+    if (saved.notion === 'saved') line = `Saved ${name} to Notion.${saved.drafted ? '\nFollow-up email drafted.' : ''}`
+    else if (saved.notion === 'failed') line = `Saved ${name}. Notion failed.`
+    else if (saved.drafted) line = `Saved ${name}. Follow-up email drafted.`
   } catch (err) {
     console.error('sending lead failed:', err)
-    line = `Saved ${who} on glasses only.`
+    // A timeout may still have reached the backend.
+    line = (err as Error).name === 'TimeoutError' ? `Saved ${who} on glasses. Sync unconfirmed.` : `Saved ${who} on glasses only.`
   }
   if (FIXTURE) await bridge.audioControl(false)
-  if (state === idle) await updateCardText(bridge, `${line}\n\n${IDLE_TEXT}`)
+  if (state === idle) await updateCardText(bridge, idleText(line))
 }
 
 async function loadLeads(): Promise<unknown[]> {
@@ -186,7 +206,7 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
 
   if (state.kind === 'card' && listType === OsEventTypeList.CLICK_EVENT) {
     const action = CARD_ACTIONS[event.listEvent?.currentSelectItemIndex ?? 0]
-    if (action === 'Save lead') void saveLead(state.result, state.check)
+    if (action === 'Save lead') void saveLead(state)
     else void goIdle()
     return
   }
