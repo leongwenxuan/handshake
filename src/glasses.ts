@@ -25,6 +25,9 @@ import { BADGE_SIZE, badgeKey, badgePng } from './badge'
 //   | Ask: How do you track pipeline today?     |
 //   | B2B software CEO, decision maker   (dim)  |
 //   | [Save lead]  Skip                         |
+//
+// When the role check finds several buyers, the page is rebuilt once with
+// "Other buyer" in place of the reason line; header and ask don't move.
 
 export const TEXT_ID = 1 // the text page's container, and the card header
 export const LIST_ID = 2
@@ -33,7 +36,14 @@ export const ASK_ID = 4
 export const WHY_ID = 5
 const BRIGHT = 4
 const DIM = 2
-export const CARD_ACTIONS = ['Save lead', 'Skip'] as const
+export const CARD_ACTIONS = ['Save lead', 'Skip']
+// With more than one buyer found, the reason line makes room for a third
+// action that switches who to ask for.
+export const SWITCH_ACTIONS = ['Save lead', 'Other buyer', 'Skip']
+
+export function actionsFor(check: Check) {
+  return typeof check === 'object' && (check.contacts?.length ?? 0) > 1 ? SWITCH_ACTIONS : CARD_ACTIONS
+}
 
 let started = false
 
@@ -108,13 +118,18 @@ export async function updateCard(bridge: EvenAppBridge, card: Card, check: Check
   const parts = cardParts(card, check)
   const update = (containerID: number, containerName: string, content: string) =>
     bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID, containerName, content }))
-  const ok = await Promise.all([update(TEXT_ID, 'main', parts.header), update(ASK_ID, 'ask', parts.ask), update(WHY_ID, 'why', parts.why)])
+  const updates = [update(TEXT_ID, 'main', parts.header), update(ASK_ID, 'ask', parts.ask)]
+  if (actionsFor(check) === CARD_ACTIONS) updates.push(update(WHY_ID, 'why', parts.why)) // no reason line otherwise
+  const ok = await Promise.all(updates)
   if (ok.includes(false)) console.error('textContainerUpgrade failed')
   await sendBadge(bridge, card)
 }
 
 export async function showCard(bridge: EvenAppBridge, card: Card, check: Check) {
   const parts = cardParts(card, check)
+  const actions = actionsFor(check)
+  const roomy = actions === CARD_ACTIONS
+  const listY = roomy ? 204 : 152
   const pad = 4
   badgeShown = '' // a rebuilt page starts with an empty image container
   await show(bridge, {
@@ -131,14 +146,14 @@ export async function showCard(bridge: EvenAppBridge, card: Card, check: Check) 
     textObject: [
       textContainer(parts.header, { x: BADGE_SIZE + 2 * pad, y: 0, w: 576 - BADGE_SIZE - 2 * pad, h: 92 }, { brightness: BRIGHT }),
       textContainer(parts.ask, { x: 0, y: 94, w: 576, h: 58 }, { id: ASK_ID, name: 'ask', brightness: BRIGHT }),
-      textContainer(parts.why, { x: 0, y: 152, w: 576, h: 50 }, { id: WHY_ID, name: 'why', brightness: DIM }),
+      ...(roomy ? [textContainer(parts.why, { x: 0, y: 152, w: 576, h: 50 }, { id: WHY_ID, name: 'why', brightness: DIM })] : []),
     ],
     listObject: [
       new ListContainerProperty({
         xPosition: 0,
-        yPosition: 204,
+        yPosition: listY,
         width: 576,
-        height: 84,
+        height: 288 - listY,
         borderWidth: 0,
         borderColor: 5,
         paddingLength: 2,
@@ -146,9 +161,9 @@ export async function showCard(bridge: EvenAppBridge, card: Card, check: Check) 
         containerName: 'actions',
         isEventCapture: 1,
         itemContainer: new ListItemContainerProperty({
-          itemCount: CARD_ACTIONS.length,
+          itemCount: actions.length,
           isItemSelectBorderEn: 1,
-          itemName: [...CARD_ACTIONS],
+          itemName: [...actions],
         }),
       }),
     ],

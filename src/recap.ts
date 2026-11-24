@@ -72,7 +72,7 @@ function leadHTML(l: Lead, i: number, fresh: boolean) {
     </div>
     ${facts.length ? `<p class="facts">${facts.join(' · ')}</p>` : ''}
     <p class="why">${esc(card.why)}</p>
-    ${v?.contact ? `<p class="ask">Ask for ${esc(v.contact.name)}${v.contact.title ? `, ${esc(v.contact.title)}` : ''}</p>` : ''}
+    ${askFor(l)}
     ${
       email
         ? `<details${fresh ? ' open' : ''}>
@@ -90,6 +90,45 @@ function leadHTML(l: Lead, i: number, fresh: boolean) {
   </article>`
 }
 
+// Who to ask for an intro. With several buyers found there, the others are
+// one tap away, and so is no one; picking redrafts the email.
+function askFor(l: Lead) {
+  const v = l.verification
+  const all = v?.contacts ?? []
+  const pick = v?.contact ?? null
+  const line = pick ? `<p class="ask">Ask for ${esc(pick.name)}${pick.title ? `, ${esc(pick.title)}` : ''}</p>` : ''
+  if (all.length < 2 && !(all.length === 1 && !pick)) return line
+  const label = (c: { name: string; title: string | null }) => `${esc(c.name)}${c.title ? `<small>${esc(c.title)}</small>` : ''}`
+  const others = all.filter(c => c.name !== pick?.name)
+  const buttons = [
+    ...others.map(c => `<button type="button" class="chip" data-lead="${esc(l.id)}" data-name="${esc(c.name)}">${label(c)}</button>`),
+    pick ? `<button type="button" class="chip none" data-lead="${esc(l.id)}" data-name="">No one</button>` : '',
+  ].join('')
+  return `${line}<div class="pick"><span>${pick ? 'Or ask for' : 'No intro. Ask for'}</span>${buttons}</div>`
+}
+
+async function switchContact(button: HTMLButtonElement) {
+  const box = button.closest('.pick')!
+  box.querySelectorAll('button').forEach(b => (b.disabled = true))
+  button.classList.add('busy')
+  try {
+    const res = await fetch(`${BACKEND_URL}/leads/contact`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: button.dataset.lead, name: button.dataset.name || null }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+    freshUntil.set(button.dataset.lead!, Date.now() + 60_000) // open the new email
+  } catch (err) {
+    console.error('switch contact failed:', err)
+    box.querySelectorAll('button').forEach(b => (b.disabled = false))
+    button.classList.remove('busy')
+    return
+  }
+  shown = ''
+  await refresh()
+}
+
 async function refresh() {
   let leads: Lead[]
   try {
@@ -98,7 +137,7 @@ async function refresh() {
   } catch {
     return // the setup section already reports an unreachable backend
   }
-  const key = JSON.stringify(leads.map(l => [l.id, !!l.notion, !!l.followUp]))
+  const key = JSON.stringify(leads.map(l => [l.id, !!l.notion, l.followUp?.body ?? null, l.verification?.contact?.name ?? null]))
   if (key === shown) return // don't redraw (it would close an open email)
   shown = key
   // The lead first appears before its email and Notion row are ready, so the
@@ -119,6 +158,9 @@ async function refresh() {
   section.innerHTML = `<h2>People you met</h2>
     <p class="summary">${summary(leads)}</p>
     <div class="leads">${sorted.map((l, i) => leadHTML(l, i, fresh.has(l.id))).join('')}</div>`
+  section.querySelectorAll<HTMLButtonElement>('[data-lead]').forEach(button => {
+    button.addEventListener('click', () => void switchContact(button))
+  })
   section.querySelectorAll<HTMLButtonElement>('[data-copy]').forEach(button => {
     button.addEventListener('click', async () => {
       const lead = sorted[Number(button.dataset.copy)]

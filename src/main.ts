@@ -1,7 +1,7 @@
 import { waitForEvenAppBridge, OsEventTypeList } from '@evenrealities/even_hub_sdk'
-import { showCard, showText, updateCard, updateCardText, CARD_ACTIONS } from './glasses'
+import { actionsFor, showCard, showText, updateCard, updateCardText } from './glasses'
 import { Capture, type StopReason } from './listen'
-import { BACKEND_URL, lookup, saveLead as saveToBackend, verify, type Check, type LookupResult } from './api'
+import { BACKEND_URL, lookup, saveLead as saveToBackend, verify, withContact, type Check, type LookupResult } from './api'
 
 // Flow: idle --tap--> listening --silence/tap--> thinking --> card --Save/Skip--> idle
 // If the lookup fails, the clip is kept: tap retries it without asking again.
@@ -15,8 +15,9 @@ type State =
   | { kind: 'failed'; audio: Uint8Array<ArrayBuffer> }
   | CardState
 
-// roleCheck resolves to the final card and check, even after the card has
-// left the screen, so a Save tapped early still gets the verified details.
+// roleCheck resolves once result and check hold the role-checked card, even
+// after the card has left the screen, so a Save tapped early still gets the
+// verified details. "Other buyer" changes them too.
 type CardState = { kind: 'card'; result: LookupResult; check: Check; roleCheck: Promise<Final> | null; saving: boolean }
 type Final = { card: LookupResult['card']; check: Check }
 
@@ -130,12 +131,27 @@ async function checkRole(shown: CardState, t0: number, rendered: Promise<void>):
     console.error('verify failed:', err)
   }
   await rendered.catch(() => {}) // a fast answer must not update the page before it exists
+  const before = actionsFor(shown.check)
+  shown.result = { ...shown.result, card }
+  shown.check = check
   if (state === shown) {
-    shown.result = { ...shown.result, card }
-    shown.check = check
-    await updateCard(bridge, card, check)
+    // Several buyers found: rebuild once to add "Other buyer".
+    if (actionsFor(check) !== before) await showCard(bridge, card, check)
+    else await updateCard(bridge, card, check)
   }
   return { card, check }
+}
+
+// "Other buyer": ask for the next person found in a buyer role there. The
+// person in front of you may say the first one left, or point to someone.
+async function nextBuyer(shown: CardState) {
+  const check = shown.check
+  if (typeof check !== 'object' || !check.contact || !check.contacts || check.contacts.length < 2) return
+  const i = check.contacts.findIndex(c => c.name === check.contact!.name)
+  const next = withContact(shown.result.card, check, check.contacts[(i + 1) % check.contacts.length])
+  shown.result = { ...shown.result, card: next.card }
+  shown.check = next.check
+  await updateCard(bridge, next.card, next.check)
 }
 
 // Saves on the glasses first, so a lead is never lost, then sends it to the
@@ -159,7 +175,9 @@ async function saveLead(shown: CardState) {
   let line = `Saved ${who}.`
   try {
     const t0 = performance.now()
-    const { card, check } = shown.roleCheck ? await shown.roleCheck : { card: result.card, check: shown.check }
+    if (shown.roleCheck) await shown.roleCheck
+    const { card } = shown.result
+    const check = shown.check
     if (card !== result.card) await replaceLead(savedAt, { ...card, transcript: result.transcript, savedAt })
     const name = card.name ?? who
     const saved = await saveToBackend(card, typeof check === 'object' ? check : null, result.transcript)
@@ -232,8 +250,9 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   }
 
   if (state.kind === 'card' && listType === OsEventTypeList.CLICK_EVENT) {
-    const action = CARD_ACTIONS[event.listEvent?.currentSelectItemIndex ?? 0]
+    const action = actionsFor(state.check)[event.listEvent?.currentSelectItemIndex ?? 0]
     if (action === 'Save lead') void saveLead(state)
+    else if (action === 'Other buyer') void nextBuyer(state)
     else void goIdle()
     return
   }

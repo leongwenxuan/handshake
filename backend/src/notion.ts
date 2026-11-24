@@ -139,10 +139,18 @@ export function notion(token: string) {
   const para = (s: string) => ({ object: 'block', type: 'paragraph', paragraph: { rich_text: text(s) } })
   const heading = (s: string) => ({ object: 'block', type: 'heading_3', heading_3: { rich_text: text(s) } })
   const quote = (s: string) => ({ object: 'block', type: 'quote', quote: { rich_text: text(s) } })
-  const email = (lead: Lead) =>
+  const bullet = (s: string) => ({ object: 'block', type: 'bulleted_list_item', bulleted_list_item: { rich_text: text(s) } })
+  const email = (lead: Lead, title = 'Follow-up email (draft)') =>
     lead.followUp
-      ? [heading('Follow-up email (draft)'), para(`Subject: ${lead.followUp.subject}`), ...lead.followUp.body.split(/\n{2,}/).map(para)]
+      ? [heading(title), para(`Subject: ${lead.followUp.subject}`), ...lead.followUp.body.split(/\n{2,}/).map(para)]
       : []
+  // Everyone found in a buyer role, so a wrong pick can be fixed later.
+  const buyers = (lead: Lead) => {
+    const all = lead.verification?.contacts ?? []
+    return all.length > 1
+      ? [heading('Buyers found there'), ...all.map(c => bullet([c.name, c.title].filter(Boolean).join(', ')))]
+      : []
+  }
 
   async function addLead(lead: Lead): Promise<{ id: string; url: string }> {
     const { data_source_id } = await ensure()
@@ -151,6 +159,7 @@ export function notion(token: string) {
       heading('Next line to say'),
       para(card.opener.replace(/^Ask:\s*/, '')),
       ...email(lead),
+      ...buyers(lead),
       heading('What they said'),
       quote(lead.transcript),
     ]
@@ -173,7 +182,15 @@ export function notion(token: string) {
     })
   }
 
-  return { ensure, addLead, updateLead }
+  // The wearer picked a different person to ask for: new "Ask for" and a
+  // new draft below the old one.
+  async function switchContact(pageId: string, lead: Lead): Promise<void> {
+    await call('PATCH', `/pages/${pageId}`, { properties: properties(lead) })
+    const who = lead.verification?.contact?.name
+    await call('PATCH', `/blocks/${pageId}/children`, { children: email(lead, who ? `Follow-up email (asking for ${who})` : 'Follow-up email (no intro)') })
+  }
+
+  return { ensure, addLead, updateLead, switchContact }
 }
 
 export type Notion = ReturnType<typeof notion>

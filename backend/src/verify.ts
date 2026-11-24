@@ -10,7 +10,14 @@ import type { Company, Person, Treg } from './treg.ts'
 export interface Verification {
   company: { name: string | null; domain: string; employees: number | null; industry: string | null; matched_by: 'domain' | 'name' } | null
   person: { name: string; title: string | null; match: 'exact' | 'close'; profile_url: string | null } | null
-  contact: { name: string; title: string | null; buyer: string } | null
+  contact: Contact | null // who to ask for: the wearer can switch it on the glasses or the phone
+  contacts?: Contact[] // everyone found in a buyer role there, most senior first (up to 3)
+}
+
+export interface Contact {
+  name: string
+  title: string | null
+  buyer: string
 }
 
 const companyCache = new Map<string, Promise<Company | null>>()
@@ -86,14 +93,39 @@ export async function verify(card: Card, profile: Profile | null, treg: Treg): P
 
   const [byName, byRole, contacts] = await (early && guess === domain ? early : searchAt(domain))
 
-  const person = card.name ? bestNameMatch(card.name, [...byName, ...byRole], domain) : null
-  const contactRow = contacts.find(r => r.name && (!person || normalize(r.name) !== normalize(person.name)))
+  const person = card.name ? bestNameMatch(card.name, [...byName, ...byRole], domain, card.role) : null
+  const others = rankContacts(contacts, person, card.name).map(r => ({ name: stripSuffix(r.name), title: r.title, buyer: buyer!.role }))
 
-  return {
-    company: facts,
-    person,
-    contact: contactRow ? { name: contactRow.name, title: contactRow.title, buyer: buyer!.role } : null,
-  }
+  return { company: facts, person, contact: others[0] ?? null, contacts: others }
+}
+
+// Several people can hold the buyer role: most senior first, each once, and
+// never the person the wearer is talking to.
+function rankContacts(rows: Person[], person: Verification['person'], heard: string | null): Person[] {
+  const skip = new Set([person?.name, heard].filter(Boolean).map(n => normalize(n!)))
+  const seen = new Set<string>()
+  return rows
+    .map((row, i) => ({ row, i, rank: seniority(row.title) }))
+    .sort((a, b) => a.rank - b.rank || a.i - b.i)
+    .map(({ row }) => row)
+    .filter(row => {
+      if (!row.name) return false
+      const key = normalize(stripSuffix(row.name))
+      if (skip.has(key) || seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .slice(0, 3)
+}
+
+// By the title's first part: "Sales Manager, VP Sales team" is a manager.
+function seniority(title: string | null) {
+  const t = normalize((title ?? '').split(/,|\s[-–|@]\s|\bat\b/)[0])
+  if (/\b(chief|ceo|cro|coo|cfo|cto|cmo|founder|cofounder|owner|president)\b/.test(t)) return 0
+  if (/\b(svp|evp|vp|vice|head)\b/.test(t)) return 1
+  if (/\bdirector\b/.test(t)) return 2
+  if (/\b(manager|lead)\b/.test(t)) return 3
+  return 4
 }
 
 // Facts for the scorer's second pass, with the first card so the verdict
@@ -132,7 +164,7 @@ function firstName(name: string) {
 
 // --- name matching ---------------------------------------------------------
 
-function bestNameMatch(heard: string, rows: Person[], domain: string): Verification['person'] {
+function bestNameMatch(heard: string, rows: Person[], domain: string, role: string | null): Verification['person'] {
   const h = normalize(heard)
   const [hFirst, ...hRest] = h.split(' ')
   const hLast = hRest.join(' ')
@@ -152,16 +184,22 @@ function bestNameMatch(heard: string, rows: Person[], domain: string): Verificat
     if (score >= 0.85) matches.push({ row, score })
   }
   if (!matches.length) return null
-  // Two different people match ("John Smith" at a big company): don't guess.
+  // Two different people match ("John Smith" at a big company): keep the one
+  // whose title fits what they said, and if that doesn't settle it, don't guess.
   // The same person often comes back from several providers with different
   // title wording, so only distinct profile links count as different people.
   const slug = (url: string) => url.toLowerCase().replace(/[?#].*$/, '').replace(/\/+$/, '').split('/').pop()
-  const people = new Set(matches.flatMap(m => (m.row.profile_url ? [slug(m.row.profile_url)] : [])))
-  if (people.size > 1) {
-    console.log(`name match ambiguous for "${heard}": ${matches.map(m => `${m.row.name} (${m.row.title})`).join('; ')}`)
-    return null
+  const people = (ms: typeof matches) => new Set(ms.flatMap(m => (m.row.profile_url ? [slug(m.row.profile_url)] : []))).size
+  let pool = matches
+  if (people(pool) > 1) {
+    const fits = role ? pool.filter(m => titleMatches(m.row.title, role)) : []
+    if (fits.length && people(fits) <= 1) pool = fits
+    else {
+      console.log(`name match ambiguous for "${heard}": ${matches.map(m => `${m.row.name} (${m.row.title})`).join('; ')}`)
+      return null
+    }
   }
-  const best = matches.reduce((a, b) => (b.score > a.score ? b : a))
+  const best = pool.reduce((a, b) => (b.score > a.score ? b : a))
   return {
     name: stripSuffix(best.row.name),
     title: best.row.title,

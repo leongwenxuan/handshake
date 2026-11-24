@@ -79,6 +79,14 @@
       .lead .facts .ok { color: var(--text); }
       .lead .why { margin-top: 6px; }
       .lead .ask { margin-top: 6px; color: var(--accent); }
+      .pick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; font-size: 13px; color: var(--muted); }
+      .pick .chip {
+        font: inherit; font-weight: 600; color: var(--text); background: transparent; border: 1px solid var(--line);
+        border-radius: 8px; padding: 5px 10px; text-align: left; line-height: 1.25;
+      }
+      .pick .chip small { display: block; font-weight: 400; color: var(--muted); }
+      .pick .chip.none { color: var(--muted); }
+      .pick .chip.busy { border-color: var(--accent); }
       details { margin-top: 10px; }
       summary { cursor: pointer; color: var(--muted); font-size: 13px; }
       .subject { margin-top: 8px; font-weight: 600; }

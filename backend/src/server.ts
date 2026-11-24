@@ -194,7 +194,10 @@ const server = createServer(async (req, res) => {
         // this person isn't the buyer and their company could be.
         // The first card's opener never names anyone, so fall back to it.
         const named = !!verification.contact
-        if (updated.buyer || updated.company_fit !== 'yes') verification.contact = null
+        if (updated.buyer || updated.company_fit !== 'yes') {
+          verification.contact = null
+          verification.contacts = []
+        }
         // The card updates in place while the wearer reads it: keep the lines
         // that didn't need to change so only the new facts move.
         if (updated.fit === card.fit) updated.why = card.why
@@ -261,6 +264,32 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { lead, notion: notion ? (notionError ? 'failed' : 'saved') : 'off', notionError, again: !!before, drafted: !!lead.followUp, timings })
     } catch (err) {
       console.error('save lead failed:', err)
+      return json(res, 500, { error: (err as Error).message })
+    }
+  }
+
+  // POST /leads/contact {id, name}: ask for a different buyer at their company
+  // (one of the people the role check found), or no one (name null). The
+  // follow-up is redrafted and the Notion row updated.
+  if (req.method === 'POST' && req.url === '/leads/contact') {
+    try {
+      const body = JSON.parse((await readBody(req, 5_000)).toString() || '{}') as { id?: string; name?: string | null }
+      const lead = readLeads().find(l => l.id === body.id)
+      if (!lead?.verification) return json(res, 404, { error: 'no such lead' })
+      const pick = body.name ? lead.verification.contacts?.find(c => c.name === body.name) : null
+      if (body.name && !pick) return json(res, 400, { error: 'not one of the buyers found' })
+      lead.verification = { ...lead.verification, contact: pick ?? null }
+      if (OPENAI_API_KEY) lead.followUp = await draftFollowUp(OPENAI_API_KEY, lead, profile).catch(() => lead.followUp)
+      let notionError: string | null = null
+      if (notion && lead.notion) await notion.switchContact(lead.notion.id, lead).catch(err => {
+        console.error('notion update failed:', err)
+        notionError = (err as Error).message
+      })
+      appendLead(lead)
+      console.log(`lead ${lead.card.name ?? '-'}: ask for ${pick?.name ?? 'no one'}`)
+      return json(res, 200, { lead, notionError })
+    } catch (err) {
+      console.error('switch contact failed:', err)
       return json(res, 500, { error: (err as Error).message })
     }
   }

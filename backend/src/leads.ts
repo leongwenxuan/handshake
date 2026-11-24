@@ -98,8 +98,8 @@ Rules:
 - 60 to 110 words. Warm, plain and specific; no hype, no buzzwords, no exclamation marks.
 - Open with one natural line that it was good to meet them, recalling something they said in your own words (never quote them back, never invent details).
 - One sentence on why the sender's product may matter to them, tied to their role and company.
-- If a better person to reach is named below, ask for a short intro to that person by name. If none is named, never ask for an intro.
-- If the fit verdict is weak, or they work at a competitor or the sender's own company, write a friendly keep-in-touch note with no sales ask.
+- If a better person to reach is named below, end by asking for a short intro to that person by name. This holds even when the fit verdict is weak: their company fits, they just aren't the buyer.
+- If none is named, never ask for an intro. Then, if the fit verdict is weak, or they work at a competitor or the sender's own company, write a friendly keep-in-touch note with no sales ask.
 - Otherwise end with one clear, low-effort ask, such as a 20-minute call next week.
 - Start with "Hi <first name>," and end with "Best," on its own line and nothing after it (the sender adds their name).`,
     user: `${seller}\n\nThe person:\n${facts.join('\n')}`,

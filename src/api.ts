@@ -16,7 +16,25 @@ export interface Card {
 export interface Verification {
   company: { name: string | null; domain: string; employees: number | null; industry: string | null; matched_by: 'domain' | 'name' } | null
   person: { name: string; title: string | null; match: 'exact' | 'close'; profile_url: string | null } | null
-  contact: { name: string; title: string | null; buyer: string } | null
+  contact: Contact | null
+  contacts?: Contact[] // every buyer found there, most senior first
+}
+
+export interface Contact {
+  name: string
+  title: string | null
+  buyer: string
+}
+
+// Switches who to ask for, and the name in what to say.
+export function withContact(card: Card, check: Verification, next: Contact): { card: Card; check: Verification } {
+  const first = (n: string) => n.split(/\s+/)[0]
+  const old = check.contact
+  const opener =
+    old && card.opener.includes(first(old.name))
+      ? card.opener.replace(old.name, next.name).replaceAll(first(old.name), first(next.name))
+      : `Ask: Could you intro me to ${first(next.name)}?`
+  return { card: { ...card, opener }, check: { ...check, contact: next } }
 }
 
 export interface LookupResult {
@@ -105,7 +123,15 @@ export function cardParts(card: Card, check: Check): { header: string; ask: stri
   const header = [clip(who, 44), clip(verdict, 44)]
   if (check === 'pending') header.push('Checking role...')
   else if (check !== 'off') {
-    if (check.contact) header.push(clip(`Buyer there: ${check.contact.name} (${check.contact.buyer})`, 44))
+    if (check.contact) {
+      // "2/3" when the wearer can switch to another buyer found there.
+      const all = check.contacts ?? []
+      const count = all.length > 1 ? ` ${all.findIndex(c => c.name === check.contact!.name) + 1}/${all.length}` : ''
+      // Their own title tells the buyers apart; the buyer role if it won't fit.
+      const c = check.contact
+      const titled = c.title ? `Buyer there: ${c.name} (${c.title})` : ''
+      header.push(titled && titled.length <= 44 - count.length ? titled + count : clip(`Buyer there: ${c.name} (${c.buyer})`, 44 - count.length) + count)
+    }
     else if (check.person && card.checked_title) header.push(clip(`Verified: ${card.checked_title}`, 44))
     else if (card.buyer && check.company) header.push('Role not verified') // only matters if they claim a buyer role
   }
