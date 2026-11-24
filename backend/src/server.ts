@@ -7,6 +7,9 @@ import { buildProfile, loadProfile, profileText, saveProfile, type Profile } fro
 import { treg as makeTreg } from './treg.ts'
 import { factsText, verify } from './verify.ts'
 import type { Card } from './score.ts'
+import { appendLead, draftFollowUp, readLeads, type Lead } from './leads.ts'
+import { notion as makeNotion } from './notion.ts'
+import type { Verification } from './verify.ts'
 
 // POST /lookup with raw PCM (s16le, 16 kHz, mono) as the body.
 // Returns the card, the transcript and how long each step took.
@@ -14,6 +17,8 @@ import type { Card } from './score.ts'
 // Treg and rescores with what it found (second, slower pass).
 // GET /profile, POST /profile {company, note?}: the wearer's company profile
 // (ideal customers and buyer roles) that every card is judged against.
+// POST /leads {card, verification, transcript}: saves a lead, drafts a
+// follow-up email and adds both to Notion. GET /leads lists saved leads.
 // Audio is only held in memory for the request and never written to disk.
 
 const PORT = Number(process.env.PORT ?? 8787)
@@ -21,9 +26,11 @@ const MAX_BYTES = 16000 * 2 * 15 // 15 s of audio
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY?.trim()
 const TREG_API_KEY = process.env.TREG_API_KEY?.trim()
+const NOTION_TOKEN = process.env.NOTION_TOKEN?.trim()
 
 let profile: Profile | null = loadProfile()
 const treg = TREG_API_KEY ? makeTreg(TREG_API_KEY) : null
+const notion = NOTION_TOKEN ? makeNotion(NOTION_TOKEN) : null
 // OpenAI transcription hears names far better than local Whisper base
 // ("Patrick Collison" vs "Patrick Carlson"), which the role check depends on.
 const transcriber = process.env.STT !== 'whisper' && OPENAI_API_KEY ? openaiTranscriber(OPENAI_API_KEY) : whisperLocal()
@@ -56,7 +63,7 @@ const server = createServer(async (req, res) => {
   if (req.method === 'OPTIONS') return res.writeHead(204).end()
 
   if (req.method === 'GET' && req.url === '/health') {
-    return json(res, 200, { ok: true, stt: transcriber.name, scorer: scorer.name, treg: !!treg, profile: profile?.company ?? null })
+    return json(res, 200, { ok: true, stt: transcriber.name, scorer: scorer.name, treg: !!treg, notion: !!notion, profile: profile?.company ?? null })
   }
 
   // Test recordings, for the app's ?fixture= dev mode.
@@ -144,11 +151,60 @@ const server = createServer(async (req, res) => {
     }
   }
 
+  if (req.method === 'GET' && req.url === '/leads') {
+    return json(res, 200, { leads: readLeads() })
+  }
+
+  if (req.method === 'POST' && req.url === '/leads') {
+    const t0 = performance.now()
+    try {
+      const body = JSON.parse((await readBody(req, 20_000)).toString() || '{}') as {
+        card?: Card
+        verification?: Verification | null
+        transcript?: string
+      }
+      if (!body.card || typeof body.transcript !== 'string') return json(res, 400, { error: 'need card and transcript' })
+      const lead: Lead = {
+        id: crypto.randomUUID(),
+        card: body.card,
+        verification: body.verification ?? null,
+        transcript: body.transcript,
+        savedAt: new Date().toISOString(),
+        followUp: null,
+        notion: null,
+      }
+      appendLead(lead) // kept even if the steps below fail
+      if (OPENAI_API_KEY) {
+        lead.followUp = await draftFollowUp(OPENAI_API_KEY, lead, profile).catch(err => {
+          console.error('follow-up draft failed:', err)
+          return null
+        })
+      }
+      const t1 = performance.now()
+      let notionError: string | null = null
+      if (notion) {
+        lead.notion = await notion.addLead(lead).catch(err => {
+          console.error('notion save failed:', err)
+          notionError = (err as Error).message
+          return null
+        })
+      }
+      appendLead(lead)
+      const t2 = performance.now()
+      const timings = { draft_ms: Math.round(t1 - t0), notion_ms: Math.round(t2 - t1), server_ms: Math.round(t2 - t0) }
+      console.log(`lead ${JSON.stringify(timings)} ${lead.card.name ?? '-'} notion=${lead.notion ? 'ok' : notion ? 'failed' : 'off'}`)
+      return json(res, 200, { lead, notion: notion ? (lead.notion ? 'saved' : 'failed') : 'off', notionError, timings })
+    } catch (err) {
+      console.error('save lead failed:', err)
+      return json(res, 500, { error: (err as Error).message })
+    }
+  }
+
   json(res, 404, { error: 'not found' })
 })
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(
-    `Handshake backend on :${PORT} · STT: ${transcriber.name} · scorer: ${scorer.name} · Treg: ${treg ? 'on' : 'off'} · profile: ${profile?.company ?? 'none (using icp.md)'}`,
+    `Handshake backend on :${PORT} · STT: ${transcriber.name} · scorer: ${scorer.name} · Treg: ${treg ? 'on' : 'off'} · Notion: ${notion ? 'on' : 'off'} · profile: ${profile?.company ?? 'none (using icp.md)'}`,
   )
 })

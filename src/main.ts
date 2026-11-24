@@ -1,7 +1,7 @@
 import { waitForEvenAppBridge, OsEventTypeList } from '@evenrealities/even_hub_sdk'
 import { showCard, showText, updateCardText, CARD_ACTIONS } from './glasses'
 import { Capture, type StopReason } from './listen'
-import { BACKEND_URL, cardText, lookup, verify, type Check, type LookupResult } from './api'
+import { BACKEND_URL, cardText, lookup, saveLead as saveToBackend, verify, type Check, type LookupResult } from './api'
 
 // Flow: idle --tap--> listening --silence/tap--> thinking --> card --Save/Skip--> idle
 // The card shows at once, then fills in when the role check returns.
@@ -110,13 +110,33 @@ async function checkRole(shown: Extract<State, { kind: 'card' }>, t0: number) {
   await updateCardText(bridge, cardText(card, check))
 }
 
+// Saves on the glasses first, so a lead is never lost, then sends it to the
+// backend, which drafts a follow-up email and adds both to Notion. The idle
+// screen shows at once and its first line updates when that finishes.
 async function saveLead(result: LookupResult, check: Check) {
-  const leads = await loadLeads()
   const verification = typeof check === 'object' ? check : null
+  const leads = await loadLeads()
   leads.push({ ...result.card, verification, transcript: result.transcript, savedAt: new Date().toISOString() })
   await bridge.setLocalStorage('leads', JSON.stringify(leads))
   console.log(`saved lead #${leads.length}`, result.card)
-  await goIdle(`Saved ${result.card.name ?? 'lead'}.`)
+
+  const who = result.card.name ?? 'lead'
+  await goIdle(`Saved ${who}. Adding to CRM...`)
+  const idle = state
+  if (FIXTURE) await bridge.audioControl(true) // keep the simulator awake (see above)
+  let line = `Saved ${who}.`
+  try {
+    const t0 = performance.now()
+    const saved = await saveToBackend(result.card, verification, result.transcript)
+    console.log(`lead sent in ${Math.round(performance.now() - t0)} ms`, saved)
+    if (saved.notion === 'saved') line = `Saved ${who} to Notion.\nFollow-up email drafted.`
+    else if (saved.notion === 'failed') line = `Saved ${who}. Notion failed.`
+  } catch (err) {
+    console.error('sending lead failed:', err)
+    line = `Saved ${who} on glasses only.`
+  }
+  if (FIXTURE) await bridge.audioControl(false)
+  if (state === idle) await updateCardText(bridge, `${line}\n\n${IDLE_TEXT}`)
 }
 
 async function loadLeads(): Promise<unknown[]> {

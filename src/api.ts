@@ -59,6 +59,22 @@ export async function verify(transcript: string, card: Card): Promise<VerifyResu
   return res.json()
 }
 
+export interface SaveResult {
+  notion: 'saved' | 'failed' | 'off'
+  notionError: string | null
+}
+
+export async function saveLead(card: Card, verification: Verification | null, transcript: string): Promise<SaveResult> {
+  const res = await fetch(`${BACKEND_URL}/leads`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ card, verification, transcript }),
+    signal: AbortSignal.timeout(15000),
+  })
+  if (!res.ok) throw new Error(`backend ${res.status}: ${await res.text()}`)
+  return res.json()
+}
+
 function clip(s: string, max: number) {
   return s.length > max ? `${s.slice(0, max - 3).trimEnd()}...` : s
 }

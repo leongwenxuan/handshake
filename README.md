@@ -10,7 +10,7 @@ One-time setup (macOS):
 
 ```bash
 npm install
-cp backend/.env.example backend/.env   # add OPENAI_API_KEY (and TREG_API_KEY, optional)
+cp backend/.env.example backend/.env   # add OPENAI_API_KEY (TREG_API_KEY and NOTION_TOKEN optional)
 brew install whisper.cpp
 mkdir -p backend/models && curl -L -o backend/models/ggml-base.en.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
@@ -46,6 +46,9 @@ Package: `npm run pack` produces an `.ehpk`.
 **At the event (glasses):** tap → the glasses mic records until the person stops talking (or you tap again) → the clip goes to the backend → Whisper transcribes it → OpenAI judges the transcript against the profile and returns a card → the glasses show the card with **Save lead** / **Skip**. Double-tap goes back, or exits from the home screen. Audio stays in memory for the request and is never stored.
 
 **Role check (second pass, about 2-4 s later):** with a Treg token, the backend looks up the company (by the domain the scorer is confident about, or an exact name match), searches its people by the name and role heard, and fuzzy-matches the name ("Kari Saarinen" heard, "Karri Saarinen" found). A database title is only shown as **Verified** when it fits what the person said, so a different person with the same name is ignored. If they aren't a buyer but their company fits, it finds who holds the main buyer role there ("Buyer there: Reema Doshi (RevOps lead)", "Ask: Could you intro me to Reema?"). The scorer then runs again with these facts, keeping its first verdict unless they give a reason to change it, and the glasses update the card in place.
+**Save:** **Save lead** stores the lead on the glasses at once, then sends it to the backend, which keeps it in `backend/data/leads.jsonl` (git-ignored), drafts a short follow-up email (an intro request when someone else is the buyer, a keep-in-touch note for a weak fit) and, with a Notion token, adds a row to a **Handshake leads** database with the verdict, verified title, who to ask for, the email draft and what they said. The glasses' home screen confirms when it lands ("Saved Sarah Chen to Notion."). The phone screen lists **People you met**, best fit first, with each email ready to copy or open in Mail.
+
+Notion setup: create an internal integration at notion.so/profile/integrations, put its secret in `NOTION_TOKEN`, then open any Notion page and add the integration under ••• → Connections. The database is created under that page on the first save.
 
 Speech-to-text defaults to OpenAI `gpt-4o-transcribe` because it gets names right far more often than local Whisper base, and the role check depends on the name. Set `STT=whisper` for the free, offline path.
 
