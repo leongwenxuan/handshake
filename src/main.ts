@@ -2,7 +2,7 @@ import { waitForEvenAppBridge, OsEventTypeList } from '@evenrealities/even_hub_s
 import { actionsFor, showCard, showText, updateCard, updateCardText } from './glasses'
 import { Capture, type StopReason } from './listen'
 import { announce } from './live'
-import { BACKEND_URL, cardParts, lookup, saveLead as saveToBackend, verify, withContact, type Check, type LookupResult } from './api'
+import { BACKEND_URL, cardParts, lookup, saveLead as saveToBackend, verify, withContact, type Card, type Check, type LookupResult, type SaveResult, type Verification } from './api'
 
 // Flow: idle --tap--> listening --silence/tap--> thinking --> card --Save/Skip--> idle
 // If the lookup fails, the clip is kept: tap retries it without asking again.
@@ -171,14 +171,17 @@ function showLive(shown: CardState) {
 // Saves on the glasses first, so a lead is never lost, then sends it to the
 // backend, which drafts a follow-up email and adds both to Notion. The home
 // screen shows at once and its first line updates when that finishes. A
-// Save tapped while the role check runs waits for it before sending.
+// Save tapped while the role check runs waits for it before sending. If the
+// send fails (venue wifi), the lead stays marked unsent and is sent again
+// later (see sendUnsent).
 async function saveLead(shown: CardState) {
   if (shown.saving) return
   shown.saving = true
   const { result } = shown
-  const savedAt = new Date().toISOString()
+  const savedAt = new Date().toISOString() // also the save's id
+  sending.add(savedAt)
   const leads = await loadLeads()
-  leads.push({ ...result.card, transcript: result.transcript, savedAt })
+  leads.push({ ...result.card, transcript: result.transcript, savedAt, verification: null, unsent: true })
   await bridge.setLocalStorage('leads', JSON.stringify(leads))
   console.log(`saved lead #${leads.length}`, result.card)
 
@@ -188,41 +191,85 @@ async function saveLead(shown: CardState) {
   const idle = state
   if (FIXTURE) await bridge.audioControl(true) // keep the simulator awake (see above)
   let line = `Saved ${who}.`
+  let sent = false
   try {
     const t0 = performance.now()
     if (shown.roleCheck) await shown.roleCheck
     const { card } = shown.result
-    const check = shown.check
-    if (card !== result.card) await replaceLead(savedAt, { ...card, transcript: result.transcript, savedAt })
+    const verification = typeof shown.check === 'object' ? shown.check : null
+    await updateStored(savedAt, { ...card, transcript: result.transcript, savedAt, verification, unsent: true })
     const name = card.name ?? who
-    const saved = await saveToBackend(card, typeof check === 'object' ? check : null, result.transcript)
+    const saved = await saveToBackend(card, verification, result.transcript, savedAt)
+    sent = true
+    await updateStored(savedAt, { unsent: false })
     console.log(`lead sent in ${Math.round(performance.now() - t0)} ms`, saved)
-    if (saved.notion === 'saved' && saved.again) line = `Met ${name} again: Notion updated.${saved.drafted ? '\nNew follow-up drafted.' : ''}`
-    else if (saved.notion === 'saved') line = `Saved ${name} to Notion.${saved.drafted ? '\nFollow-up email drafted.' : ''}`
-    else if (saved.notion === 'failed') line = `Saved ${name}. Notion failed.`
-    else if (saved.drafted) line = `Saved ${name}. Follow-up email drafted.`
+    line = resultLine(name, saved)
   } catch (err) {
     console.error('sending lead failed:', err)
-    // The backend may have stored it before the connection failed.
-    line = `Saved ${who} on glasses. Sync unconfirmed.`
+    line = `Saved ${who} on glasses.\nWill sync when back online.`
+  } finally {
+    sending.delete(savedAt)
   }
   if (FIXTURE) await bridge.audioControl(false)
   if (state === idle) {
     announce({ kind: 'idle', text: line.replace('\n', ' ') })
     await updateCardText(bridge, idleText(line))
   }
+  if (sent) void sendUnsent() // the backend is reachable: send anything left over
 }
 
-// Swaps the glasses' copy of a lead for its role-checked version.
-async function replaceLead(savedAt: string, lead: object) {
-  const leads = (await loadLeads()) as { savedAt?: string }[]
+function resultLine(name: string, saved: SaveResult) {
+  if (saved.notion === 'saved' && saved.again) return `Met ${name} again: Notion updated.${saved.drafted ? '\nNew follow-up drafted.' : ''}`
+  if (saved.notion === 'saved') return `Saved ${name} to Notion.${saved.drafted ? '\nFollow-up email drafted.' : ''}`
+  if (saved.notion === 'failed') return `Saved ${name}. Notion failed.`
+  if (saved.drafted) return `Saved ${name}. Follow-up email drafted.`
+  return `Saved ${name}.`
+}
+
+// A lead as kept on the glasses. unsent: the backend hasn't confirmed it.
+// Leads stored before this field existed count as sent.
+type Stored = Card & { transcript: string; savedAt: string; verification?: Verification | null; unsent?: boolean }
+
+const sending = new Set<string>() // saves in flight, by savedAt
+let resending = false
+
+// Sends leads the backend never confirmed, oldest first. Safe to repeat: the
+// backend recognises a save it already has.
+async function sendUnsent() {
+  if (resending) return
+  resending = true
+  let done = 0
+  try {
+    for (const lead of await loadLeads()) {
+      if (!lead.unsent || sending.has(lead.savedAt)) continue
+      const { transcript, savedAt, verification, unsent: _, ...card } = lead
+      try {
+        await saveToBackend(card, verification ?? null, transcript, savedAt)
+      } catch {
+        break // still offline: try again later
+      }
+      await updateStored(savedAt, { unsent: false })
+      done++
+    }
+  } finally {
+    resending = false
+  }
+  if (done && state.kind === 'idle') {
+    const line = `Synced ${done} saved lead${done === 1 ? '' : 's'}.`
+    announce({ kind: 'idle', text: line })
+    await updateCardText(bridge, idleText(line))
+  }
+}
+
+async function updateStored(savedAt: string, patch: Partial<Stored>) {
+  const leads = await loadLeads()
   const i = leads.findIndex(l => l.savedAt === savedAt)
   if (i < 0) return
-  leads[i] = lead
+  leads[i] = { ...leads[i], ...patch }
   await bridge.setLocalStorage('leads', JSON.stringify(leads))
 }
 
-async function loadLeads(): Promise<unknown[]> {
+async function loadLeads(): Promise<Stored[]> {
   try {
     const raw = await bridge.getLocalStorage('leads')
     return raw ? JSON.parse(raw) : []
@@ -283,3 +330,5 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
 })
 
 await goIdle()
+void sendUnsent()
+setInterval(() => void sendUnsent(), 60_000)

@@ -36,7 +36,7 @@ export async function chatJSON<T>(
 const CARD_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['name', 'company', 'company_domain', 'role', 'checked_title', 'relation', 'competitor', 'company_fit', 'buyer', 'fit', 'score', 'why', 'opener'],
+  required: ['name', 'company', 'company_domain', 'role', 'checked_title', 'relation', 'company_fit', 'buyer', 'fit', 'score', 'why', 'opener'],
   properties: {
     name: { type: ['string', 'null'], description: "The other person's name as they said it, or null" },
     company: { type: ['string', 'null'], description: 'Their company, or null' },
@@ -51,10 +51,6 @@ const CARD_SCHEMA = {
         'Only when checked facts are given: their job title from the facts, if it is consistent with what they said about their role. Null if it conflicts (it may be a different person with the same name) or there are no facts',
     },
     relation: { type: 'string', enum: ['prospect', 'colleague'], description: "colleague: works at the wearer's company. Otherwise prospect" },
-    competitor: {
-      type: ['string', 'null'],
-      description: "Only if their company is in the profile's Competitors list: that name exactly as written there. Otherwise null",
-    },
     company_fit: {
       type: 'string',
       enum: ['yes', 'no', 'unknown'],
@@ -86,7 +82,6 @@ Rules:
 - Fix an obvious mishearing of a famous company name (for example "Stride" said in a fintech context is probably "Stripe") only when you are confident. Keep personal names as heard.
 - If no name or company was said, return nulls for them and fit "unknown".
 - A colleague is not a prospect: set fit "unknown", score null and buyer null, and keep the opener friendly.
-- If they work at a listed competitor, still fill the other fields, but the opener asks what they're seeing in the market (e.g. "Ask: What are buyers asking for lately?"), never pitches.
 - Checked facts, when given, come from a business database looked up by the name and company you heard. Trust them for company size and industry. A person row may be someone else with the same name: use their title only if it fits what they said (a "Cofounder" title fits "one of the founders"; "Software Engineer" does not fit "I run partnerships"). If it conflicts, ignore that row and trust what they said.
 - "why" is at most 45 characters, in whole words: shorten the phrase rather than cutting a word off. "opener" starts with "Ask: " and is at most 60 characters, specific to them and to what the wearer sells.
 

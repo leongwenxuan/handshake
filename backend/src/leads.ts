@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { chatJSON } from './openai.ts'
 import type { Profile } from './profile.ts'
 import { action, type Card } from './score.ts'
@@ -23,6 +23,7 @@ export interface Lead {
   notion: { id: string; url: string } | null
   meetings?: number // times saved; missing means 1
   firstMet?: string
+  saves?: string[] // the glasses' id for each save, so a resent one isn't counted twice
 }
 
 const norm = (s: string | null | undefined) =>
@@ -33,13 +34,13 @@ const norm = (s: string | null | undefined) =>
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
 
-// An earlier save of the same person: same name at the same company.
+// An earlier save of the same person: same name at the same company, or
+// same full name when neither save caught a company.
 export function findSame(leads: Lead[], lead: Pick<Lead, 'card' | 'verification'>): Lead | null {
   const name = norm(lead.card.name)
   if (!name || !name.includes(' ')) return null // a first name alone is too ambiguous
   const company = (l: Pick<Lead, 'card' | 'verification'>) => norm(l.verification?.company?.domain ?? l.card.company_domain ?? l.card.company)
   const at = company(lead)
-  if (!at) return null
   return leads.find(l => norm(l.card.name) === name && company(l) === at) ?? null
 }
 
@@ -49,6 +50,22 @@ const LEADS_FILE = new URL('leads.jsonl', DATA_DIR)
 export function appendLead(lead: Lead) {
   mkdirSync(DATA_DIR, { recursive: true })
   appendFileSync(LEADS_FILE, `${JSON.stringify(lead)}\n`)
+}
+
+// Deletes every line of a lead (the file only ever appends otherwise).
+export function removeLead(id: string) {
+  if (!existsSync(LEADS_FILE)) return
+  const keep = readFileSync(LEADS_FILE, 'utf8')
+    .split('\n')
+    .filter(line => {
+      if (!line.trim()) return false
+      try {
+        return (JSON.parse(line) as Lead).id !== id
+      } catch {
+        return false
+      }
+    })
+  writeFileSync(LEADS_FILE, keep.length ? `${keep.join('\n')}\n` : '')
 }
 
 // Later lines win, so a lead updated after its Notion save replaces itself.

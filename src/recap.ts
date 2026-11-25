@@ -127,7 +127,7 @@ function leadHTML(l: Lead, fresh: boolean) {
           : ''
       }
       <div class="block"><h3>What they said</h3><p class="quote">“${esc(l.transcript)}”</p></div>
-      <div class="meta"><span>Met ${time}${again}</span>${l.notion ? `<a href="${esc(l.notion.url)}" target="_blank" rel="noopener">Open in Notion ↗</a>` : ''}</div>
+      <div class="meta"><span>Met ${time}${again}</span><span class="links"><button type="button" class="remove" data-remove="${esc(l.id)}">Remove</button>${l.notion ? `<a href="${esc(l.notion.url)}" target="_blank" rel="noopener">Open in Notion ↗</a>` : ''}</span></div>
     </div>
   </article>`
 }
@@ -169,6 +169,8 @@ section.addEventListener('click', e => {
   const target = e.target as HTMLElement
   const pick = target.closest<HTMLButtonElement>('[data-lead]')
   if (pick) return void switchContact(pick)
+  const remove = target.closest<HTMLButtonElement>('[data-remove]')
+  if (remove) return void removeLead(remove)
   const copy = target.closest<HTMLButtonElement>('[data-copy]')
   if (copy) return void copyEmail(copy)
   const row = target.closest<HTMLButtonElement>('.row')
@@ -220,6 +222,38 @@ async function switchContact(button: HTMLButtonElement) {
     button.classList.remove('busy')
     return
   }
+  shown = ''
+  await refresh()
+}
+
+// Two taps: the first arms the button, so a stray tap can't delete anyone.
+async function removeLead(button: HTMLButtonElement) {
+  if (!button.classList.contains('armed')) {
+    button.classList.add('armed')
+    button.textContent = 'Remove?'
+    setTimeout(() => {
+      button.classList.remove('armed')
+      button.textContent = 'Remove'
+    }, 3000)
+    return
+  }
+  button.disabled = true
+  button.textContent = 'Removing...'
+  try {
+    const res = await fetch(`${BACKEND_URL}/leads/remove`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: button.dataset.remove }),
+    })
+    if (!res.ok) throw new Error(await res.text())
+  } catch (err) {
+    console.error('remove failed:', err)
+    button.disabled = false
+    button.textContent = 'Remove'
+    button.classList.remove('armed')
+    return
+  }
+  open.delete(button.dataset.remove!)
   shown = ''
   await refresh()
 }

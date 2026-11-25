@@ -36,6 +36,19 @@ export const ACTION_LABEL: Record<Action, string> = {
   colleague: 'Colleague',
 }
 
+// A plain reason for the verdict, for when the model's own one is wrong.
+export function plainWhy(card: Card): string {
+  const at = card.company && card.company.length <= 20 ? card.company : 'Their company'
+  return {
+    pitch: `${at} fits; ${card.buyer && card.buyer.length <= 22 ? card.buyer : 'a buyer role'}`,
+    intro: `${at} fits; they're not the buyer`,
+    unsure: 'Too little said to judge their company',
+    pass: `${at} isn't a customer fit`,
+    competitor: 'Works at a competitor',
+    colleague: 'Works at your company',
+  }[action({ ...card, relation: 'prospect' })]
+}
+
 export interface Scorer {
   name: string
   // facts: checked information from the role lookup, used for a second pass

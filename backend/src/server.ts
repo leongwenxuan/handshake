@@ -1,13 +1,13 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { whisperLocal } from './stt.ts'
-import { action, mockScorer } from './score.ts'
+import { action, mockScorer, plainWhy } from './score.ts'
 import { openaiScorer, openaiTranscriber } from './openai.ts'
 import { buildProfile, loadProfile, profileText, saveProfile, toDomain, type Profile } from './profile.ts'
 import { treg as makeTreg } from './treg.ts'
 import { factsText, similarity, verify } from './verify.ts'
 import type { Card } from './score.ts'
-import { appendLead, draftFollowUp, findSame, readLeads, type Lead } from './leads.ts'
+import { appendLead, draftFollowUp, findSame, readLeads, removeLead, type Lead } from './leads.ts'
 import { notion as makeNotion } from './notion.ts'
 import type { Verification } from './verify.ts'
 
@@ -35,17 +35,37 @@ const notion = NOTION_TOKEN ? makeNotion(NOTION_TOKEN) : null
 // ("Patrick Collison" vs "Patrick Carlson"), which the role check depends on.
 const transcriber = process.env.STT !== 'whisper' && OPENAI_API_KEY ? openaiTranscriber(OPENAI_API_KEY, () => (profile ? `The listener is ${profile.you ? `${profile.you} from ` : 'from '}${profile.company}.` : null)) : whisperLocal()
 const baseScorer = OPENAI_API_KEY ? openaiScorer(OPENAI_API_KEY, () => profileText(profile)) : mockScorer()
-// A competitor card only when the model names a company that really is on
-// the profile's competitor list: the model alone calls too many software
-// companies competitors, and a missed pitch costs more than a missed label.
+// Competitors are matched here, by name or domain against the profile's
+// list, not judged by the model: asked to, it called almost any company a
+// competitor (Stripe, for a CRM), and that leaked into its verdict, reason
+// and opener. A listed competitor gets no pitch, just a question about the
+// market.
+const key = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+function listedCompetitor(card: Card): string | null {
+  const heard = [card.company, card.company_domain, card.company_domain?.split('.')[0]].filter((s): s is string => !!s).map(key)
+  return profile?.competitors?.find(c => heard.includes(key(c)) || heard.includes(key(c.split('.')[0]))) ?? null
+}
+
 const scorer = {
   name: baseScorer.name,
   async score(transcript: string, facts?: string): Promise<Card> {
     const card = await baseScorer.score(transcript, facts)
-    const key = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
-    const listed = card.competitor && profile?.competitors?.some(c => key(c) === key(card.competitor!))
-    if (!listed) return { ...card, competitor: null }
-    return { ...card, relation: 'competitor', fit: 'unknown', score: null, buyer: null }
+    const competitor = listedCompetitor(card)
+    if (!competitor) {
+      // A reason that still says "competitor" gets the plain one instead.
+      const why = /\b(competitor|competing|competes|rival)/i.test(card.why) ? plainWhy(card) : card.why
+      return { ...card, competitor: null, why }
+    }
+    return {
+      ...card,
+      competitor,
+      relation: 'competitor',
+      fit: 'unknown',
+      score: null,
+      buyer: null,
+      why: `Works at ${competitor}, a competitor`.slice(0, 45),
+      opener: 'Ask: What are buyers asking for lately?',
+    }
   },
 }
 
@@ -225,9 +245,17 @@ const server = createServer(async (req, res) => {
         card?: Card
         verification?: Verification | null
         transcript?: string
+        saveId?: string
       }
       if (!body.card || typeof body.transcript !== 'string') return json(res, 400, { error: 'need card and transcript' })
       const verification = body.verification ?? null
+      // The glasses resend a save whose reply they never got; it may have
+      // landed already.
+      const saveId = typeof body.saveId === 'string' ? body.saveId : null
+      const landed = saveId ? readLeads().find(l => l.saves?.includes(saveId)) : null
+      if (landed) {
+        return json(res, 200, { lead: landed, notion: notion ? (landed.notion ? 'saved' : 'failed') : 'off', notionError: null, again: (landed.meetings ?? 1) > 1, drafted: !!landed.followUp, resent: true })
+      }
       // Met before: update that lead (and its Notion row) instead of adding one.
       const before = findSame(readLeads(), { card: body.card, verification })
       const lead: Lead = {
@@ -240,6 +268,7 @@ const server = createServer(async (req, res) => {
         notion: before?.notion ?? null,
         meetings: (before?.meetings ?? (before ? 1 : 0)) + 1,
         firstMet: before?.firstMet ?? before?.savedAt ?? undefined,
+        saves: saveId ? [...(before?.saves ?? []), saveId] : before?.saves,
       }
       appendLead(lead) // kept even if the steps below fail
       if (OPENAI_API_KEY) {
@@ -291,6 +320,27 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { lead, notionError })
     } catch (err) {
       console.error('switch contact failed:', err)
+      return json(res, 500, { error: (err as Error).message })
+    }
+  }
+
+  // POST /leads/remove {id}: forget a lead (a mis-hear or a test), and move
+  // its Notion row to the trash.
+  if (req.method === 'POST' && req.url === '/leads/remove') {
+    try {
+      const body = JSON.parse((await readBody(req, 2_000)).toString() || '{}') as { id?: string }
+      const lead = readLeads().find(l => l.id === body.id)
+      if (!lead) return json(res, 404, { error: 'no such lead' })
+      let notionError: string | null = null
+      if (notion && lead.notion) await notion.trash(lead.notion.id).catch(err => {
+        console.error('notion trash failed:', err)
+        notionError = (err as Error).message
+      })
+      removeLead(lead.id)
+      console.log(`lead ${lead.card.name ?? '-'} removed${lead.notion ? (notionError ? ' (Notion row kept)' : ' and its Notion row trashed') : ''}`)
+      return json(res, 200, { ok: true, notionError })
+    } catch (err) {
+      console.error('remove lead failed:', err)
       return json(res, 500, { error: (err as Error).message })
     }
   }

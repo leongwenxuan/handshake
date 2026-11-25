@@ -189,7 +189,12 @@ export function notion(token: string) {
     await call('PATCH', `/blocks/${pageId}/children`, { children: email(lead, who ? `Follow-up email (asking for ${who})` : 'Follow-up email (no intro)') })
   }
 
-  return { ensure, addLead, updateLead, switchContact }
+  // A lead removed on the phone: its row goes to Notion's trash (restorable).
+  async function trash(pageId: string): Promise<void> {
+    await call('PATCH', `/pages/${pageId}`, { in_trash: true })
+  }
+
+  return { ensure, addLead, updateLead, switchContact, trash }
 }
 
 export type Notion = ReturnType<typeof notion>

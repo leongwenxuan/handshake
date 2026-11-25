@@ -109,13 +109,15 @@ export interface SaveResult {
   notionError: string | null
   drafted: boolean
   again: boolean // met before: the existing lead was updated
+  resent?: boolean // it had landed already, from an earlier try
 }
 
-export async function saveLead(card: Card, verification: Verification | null, transcript: string): Promise<SaveResult> {
+// saveId identifies this save, so sending it twice stores it once.
+export async function saveLead(card: Card, verification: Verification | null, transcript: string, saveId: string): Promise<SaveResult> {
   const res = await fetch(`${BACKEND_URL}/leads`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ card, verification, transcript }),
+    body: JSON.stringify({ card, verification, transcript, saveId }),
     signal: AbortSignal.timeout(15000),
   })
   if (!res.ok) throw new Error(`backend ${res.status}: ${await res.text()}`)
