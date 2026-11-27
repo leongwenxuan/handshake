@@ -1,6 +1,6 @@
-import { waitForEvenAppBridge, OsEventTypeList } from '@evenrealities/even_hub_sdk'
+import { waitForEvenAppBridge, OsEventTypeList, type DeviceStatus } from '@evenrealities/even_hub_sdk'
 import { actionsFor, showCard, showText, updateCard, updateCardText } from './glasses'
-import { Capture, type StopReason } from './listen'
+import { Capture, type Speaker, type StopReason } from './listen'
 import { announce } from './live'
 import { BACKEND_URL, cardParts, lookup, saveLead as saveToBackend, verify, withContact, type Card, type Check, type LookupResult, type SaveResult, type Verification } from './api'
 
@@ -8,6 +8,8 @@ import { BACKEND_URL, cardParts, lookup, saveLead as saveToBackend, verify, with
 // If the lookup fails, the clip is kept: tap retries it without asking again.
 // The card shows at once, then fills in when the role check returns.
 // Double-tap: from idle exits the app; from anywhere else goes back to idle.
+// Leaving the app (another app or the glasses menu takes over) stops a
+// capture in progress: the mic stops anyway if the phone suspends the app.
 
 type State =
   | { kind: 'idle' }
@@ -32,8 +34,40 @@ const idleText = (message?: string) => (message ? `${message}\n\n${HINT}` : `Han
 async function goIdle(message?: string) {
   if (FIXTURE && state.kind === 'card') void bridge.audioControl(false)
   state = { kind: 'idle' }
-  announce({ kind: 'idle', text: message ?? 'Glasses ready' })
+  announceIdle(message)
   await showText(bridge, idleText(message))
+}
+
+// The phone pill says whether the glasses are connected, as the Even app
+// reports it. null: not reported yet (a plain browser never reports it, so
+// the pill stays hidden there).
+let connected: boolean | null = null
+let glassesSn: string | null = null
+let idleMessage: string | undefined
+
+function announceIdle(message?: string) {
+  idleMessage = message
+  if (connected === null) return
+  const text = connected ? (message ?? 'Glasses ready') : 'Glasses not connected'
+  announce({ kind: connected ? 'idle' : 'error', text: text.replace('\n', ' ') })
+}
+
+function onStatus(status: DeviceStatus) {
+  if (glassesSn && status.sn && status.sn !== glassesSn) return // the ring, not the glasses
+  const was = connected
+  connected = status.connectType === 'connected'
+  if (connected === was) return
+  console.log(`glasses ${connected ? 'connected' : status.connectType}`)
+  if (!connected && state.kind === 'listening') return void cancelListening("Glasses disconnected. Tap to try again.")
+  if (state.kind === 'idle') announceIdle(idleMessage)
+}
+
+// Stops the mic and drops the clip, without asking for it to be checked.
+function cancelListening(message?: string) {
+  if (state.kind !== 'listening') return
+  state.capture.stop('tap')
+  void bridge.audioControl(false)
+  return goIdle(message)
 }
 
 // Dev only: ?fixture=<name> plays backend/fixtures/<name>.wav into the
@@ -45,9 +79,10 @@ async function startListening() {
   state = { kind: 'listening', capture }
   announce({ kind: 'listening' })
   await showText(bridge, 'Listening...\n\nStops when they pause.\nTap to finish now. Double-tap to cancel.')
-  // The capture's own limits count audio chunks; this covers a mic that
-  // never starts sending them.
-  setTimeout(() => capture.stop('max'), 15000)
+  // The capture's own limits count audio chunks; these cover a mic that
+  // never starts sending them, or stalls.
+  setTimeout(() => capture.firstChunkAt === null && capture.stop('max'), 6000)
+  setTimeout(() => capture.stop('max'), 20000)
   if (FIXTURE) return void playFixture(FIXTURE, capture)
   await bridge.audioControl(true)
 }
@@ -79,6 +114,7 @@ async function finishListening(capture: Capture, reason: StopReason) {
   const micDelay = capture.firstChunkAt === null ? null : Math.round(capture.firstChunkAt - capture.startedAt)
   console.log(`capture stopped: ${reason}, ${capture.elapsedMs} ms audio, first chunk after ${micDelay} ms`)
   console.log(`levels (x1000): ${capture.levelTrace}`)
+  console.log(`speaker tags: ${capture.speakerTrace}`)
 
   if (!capture.speech) return goIdle("Didn't catch that.")
   await checkFit(capture.audio())
@@ -212,7 +248,7 @@ async function saveLead(shown: CardState) {
   }
   if (FIXTURE) await bridge.audioControl(false)
   if (state === idle) {
-    announce({ kind: 'idle', text: line.replace('\n', ' ') })
+    announceIdle(line)
     await updateCardText(bridge, idleText(line))
   }
   if (sent) void sendUnsent() // the backend is reachable: send anything left over
@@ -256,7 +292,7 @@ async function sendUnsent() {
   }
   if (done && state.kind === 'idle') {
     const line = `Synced ${done} saved lead${done === 1 ? '' : 's'}.`
-    announce({ kind: 'idle', text: line })
+    announceIdle(line)
     await updateCardText(bridge, idleText(line))
   }
 }
@@ -288,14 +324,35 @@ function eventTypeOf(envelope?: { eventType?: OsEventTypeList }): OsEventTypeLis
 
 function backOrExit() {
   if (state.kind === 'idle') return bridge.shutDownPageContainer(1)
-  if (state.kind === 'listening') bridge.audioControl(false)
+  if (state.kind === 'listening') return cancelListening()
   return goIdle()
+}
+
+// Back on screen: redraw the home screen if a capture was cut short, and
+// send anything saved while away.
+let away = false
+function onForeground(entered: boolean) {
+  console.log(`app ${entered ? 'back in foreground' : 'left foreground'}`)
+  if (!entered) {
+    away = true
+    if (state.kind === 'listening') {
+      state.capture.stop('tap')
+      void bridge.audioControl(false)
+      state = { kind: 'idle' }
+      idleMessage = 'Stopped listening when you left.'
+    }
+    return
+  }
+  if (!away) return
+  away = false
+  if (state.kind === 'idle') void goIdle(idleMessage)
+  void sendUnsent()
 }
 
 const unsubscribe = bridge.onEvenHubEvent(event => {
   const pcm = event.audioEvent?.audioPcm
   if (pcm) {
-    if (state.kind === 'listening') state.capture.push(pcm)
+    if (state.kind === 'listening') state.capture.push(pcm, event.audioEvent?.speakerRole as Speaker | undefined)
     return
   }
 
@@ -305,6 +362,11 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
 
   if ([sysType, textType, listType].includes(OsEventTypeList.DOUBLE_CLICK_EVENT)) {
     void backOrExit()
+    return
+  }
+
+  if (sysType === OsEventTypeList.FOREGROUND_EXIT_EVENT || sysType === OsEventTypeList.FOREGROUND_ENTER_EVENT) {
+    onForeground(sysType === OsEventTypeList.FOREGROUND_ENTER_EVENT)
     return
   }
 
@@ -328,6 +390,16 @@ const unsubscribe = bridge.onEvenHubEvent(event => {
   else if (state.kind === 'listening') state.capture.stop('tap')
   else if (state.kind === 'failed') void checkFit(state.audio)
 })
+
+bridge.onDeviceStatusChanged(onStatus)
+void bridge
+  .getDeviceInfo()
+  .then(info => {
+    if (!info) return
+    glassesSn = info.sn
+    if (connected === null && info.status) onStatus(info.status)
+  })
+  .catch(err => console.error('device info failed:', err))
 
 await goIdle()
 void sendUnsent()

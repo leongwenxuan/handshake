@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { Capture, type StopReason } from '../src/listen.ts'
+import { Capture, type Speaker, type StopReason } from '../src/listen.ts'
 import { wavToPcm } from '../backend/src/wav.ts'
 
 // Feeds the fixture intros through the silence detector the way the glasses
@@ -75,6 +75,65 @@ const q = run(quiet)
 const quietOk = q.reason === 'no-speech'
 if (!quietOk) failures++
 console.log(`${quietOk ? 'ok  ' : 'FAIL'} room noise + bumps only        stop=${q.reason} at ${q.stoppedAtMs} ms`)
+
+// Speaker tags from the glasses: the wearer introduces themselves first.
+// Each part is [samples, tag]; chunks take the tag of the part they start in.
+function runTagged(parts: [Int16Array, Speaker][]) {
+  const samples = new Int16Array(parts.reduce((n, [p]) => n + p.length, 0))
+  const tags: Speaker[] = []
+  let at = 0
+  for (const [p, tag] of parts) {
+    samples.set(p, at)
+    for (let k = Math.ceil(at / (CHUNK / 2)); k * (CHUNK / 2) < at + p.length; k++) tags[k] = tag
+    at += p.length
+  }
+  let reason: StopReason | null = null
+  const capture = new Capture(r => (reason = r))
+  const bytes = new Uint8Array(samples.buffer)
+  for (let off = 0, i = 0; off + CHUNK <= bytes.length; off += CHUNK, i++) {
+    if (!capture.push(bytes.slice(off, off + CHUNK), tags[i] ?? 'unknown')) break
+  }
+  return { reason: reason as StopReason | null, stoppedAtMs: capture.elapsedMs, clipMs: capture.audio().length / 32, speech: capture.speech }
+}
+
+const clipOf = (name: string) => {
+  const pcm = wavToPcm(readFileSync(join(dir, name)))
+  return new Int16Array(pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength))
+}
+const ms = (samples: Int16Array) => (samples.length / 16000) * 1000
+const wearer = clipOf('karri-linear.wav')
+const them = clipOf('sarah-stripe.wav')
+const check = (ok: boolean, label: string, detail: string) => {
+  if (!ok) failures++
+  console.log(`${ok ? 'ok  ' : 'FAIL'} ${label.padEnd(32)} ${detail}`)
+}
+
+{
+  const r = runTagged([[roomNoise(LEAD_MS, 0.0015), 'unknown'], [wearer, 'self'], [roomNoise(1500, 0.0015), 'unknown'], [them, 'other'], [roomNoise(TAIL_MS, 0.0015), 'unknown']])
+  const end = LEAD_MS + ms(wearer) + 1500 + ms(them)
+  const expectedClip = r.stoppedAtMs - (LEAD_MS + ms(wearer)) - 600
+  check(
+    r.reason === 'silence' && r.stoppedAtMs > end - 1000 && r.stoppedAtMs <= end + 1300 && Math.abs(r.clipMs - expectedClip) < 1200,
+    'wearer first, then them',
+    `stop=${r.reason} at ${r.stoppedAtMs} ms (they end ~${Math.round(end)}), clip ${Math.round(r.clipMs)} ms of ${r.stoppedAtMs}`,
+  )
+}
+{
+  const r = runTagged([[roomNoise(LEAD_MS, 0.0015), 'unknown'], [them, 'self'], [roomNoise(8000, 0.0015), 'unknown']])
+  check(
+    r.reason === 'no-speech' && r.speech && r.clipMs === r.stoppedAtMs,
+    'everyone tagged as the wearer',
+    `stop=${r.reason} at ${r.stoppedAtMs} ms, still sent: ${r.speech}, clip ${Math.round(r.clipMs)} ms (whole)`,
+  )
+}
+{
+  const r = runTagged([[roomNoise(LEAD_MS, 0.0015), 'unknown'], [wearer, 'self'], [roomNoise(1500, 0.0015), 'unknown'], [them, 'self'], [roomNoise(TAIL_MS, 0.0015), 'unknown']])
+  check(
+    r.reason === 'silence' && r.clipMs === r.stoppedAtMs,
+    'them also tagged as the wearer',
+    `stop=${r.reason} at ${r.stoppedAtMs} ms, clip ${Math.round(r.clipMs)} ms (whole, nothing cut)`,
+  )
+}
 
 console.log(failures ? `\n${failures} failed` : '\nall passed')
 process.exit(failures ? 1 : 0)
