@@ -1,5 +1,7 @@
 # Handshake: in-person ICP check on Even G2
 
+> The plan as written on Nov 23, before the build. The app changed since: it uses OpenAI rather than Claude, shows a next step (Pitch them, Get an intro...) rather than a score out of 10, and adds a role check and Notion. The [README](../README.md) describes what was built.
+
 Hackathon: Heads Up (Even Realities x TVM Ventures x Daos Hub, on DoraHacks)
 Track: 04 AI Assistants & Work (Claude, Notion, Google Workspace)
 Build week: Nov 23-29, 2026. Submission deadline Nov 29, 23:59 Dubai time. Demo Day Dec 3.
