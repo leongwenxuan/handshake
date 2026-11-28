@@ -6,7 +6,7 @@ import type { Verification } from './verify.ts'
 
 // Leads saved from the glasses. Kept in backend/data/leads.jsonl (one JSON
 // object per line, git-ignored) for the end-of-night recap, and copied to
-// Notion when a token is set.
+// the CRM (HubSpot or Notion) when a token is set.
 
 export interface FollowUp {
   subject: string
@@ -21,6 +21,7 @@ export interface Lead {
   savedAt: string
   followUp: FollowUp | null
   notion: { id: string; url: string } | null
+  hubspot?: { id: string; url: string | null } | null // contact id, when HubSpot is the CRM
   meetings?: number // times saved; missing means 1
   firstMet?: string
   saves?: string[] // the glasses' id for each save, so a resent one isn't counted twice

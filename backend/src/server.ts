@@ -9,6 +9,7 @@ import { factsText, similarity, verify } from './verify.ts'
 import type { Card } from './score.ts'
 import { appendLead, draftFollowUp, findSame, readLeads, removeLead, type Lead } from './leads.ts'
 import { notion as makeNotion } from './notion.ts'
+import { hubspot as makeHubSpot } from './hubspot.ts'
 import type { Verification } from './verify.ts'
 
 // POST /lookup with raw PCM (s16le, 16 kHz, mono) as the body.
@@ -18,7 +19,8 @@ import type { Verification } from './verify.ts'
 // GET /profile, POST /profile {company, note?}: the wearer's company profile
 // (ideal customers and buyer roles) that every card is judged against.
 // POST /leads {card, verification, transcript}: saves a lead, drafts a
-// follow-up email and adds both to Notion. GET /leads lists saved leads.
+// follow-up email and adds both to the CRM: HubSpot when HUBSPOT_TOKEN is
+// set, otherwise Notion. GET /leads lists saved leads.
 // Audio is only held in memory for the request and never written to disk.
 
 const PORT = Number(process.env.PORT ?? 8787)
@@ -27,10 +29,13 @@ const MAX_BYTES = 16000 * 2 * 15 // 15 s of audio
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY?.trim()
 const TREG_API_KEY = process.env.TREG_API_KEY?.trim()
 const NOTION_TOKEN = process.env.NOTION_TOKEN?.trim()
+const HUBSPOT_TOKEN = process.env.HUBSPOT_TOKEN?.trim()
 
 let profile: Profile | null = loadProfile()
 const treg = TREG_API_KEY ? makeTreg(TREG_API_KEY) : null
-const notion = NOTION_TOKEN ? makeNotion(NOTION_TOKEN) : null
+// One CRM gets the leads: HubSpot if it's set up, otherwise Notion.
+const hubspot = HUBSPOT_TOKEN ? makeHubSpot(HUBSPOT_TOKEN) : null
+const notion = !hubspot && NOTION_TOKEN ? makeNotion(NOTION_TOKEN) : null
 // OpenAI transcription hears names far better than local Whisper base
 // ("Patrick Collison" vs "Patrick Carlson"), which the role check depends on.
 const transcriber = process.env.STT !== 'whisper' && OPENAI_API_KEY ? openaiTranscriber(OPENAI_API_KEY, () => (profile ? `The listener is ${profile.you ? `${profile.you} from ` : 'from '}${profile.company}.` : null)) : whisperLocal()
@@ -111,7 +116,7 @@ const server = createServer(async (req, res) => {
   if (req.method === 'OPTIONS') return res.writeHead(204).end()
 
   if (req.method === 'GET' && req.url === '/health') {
-    return json(res, 200, { ok: true, stt: transcriber.name, scorer: scorer.name, treg: !!treg, notion: !!notion, profile: profile?.company ?? null })
+    return json(res, 200, { ok: true, stt: transcriber.name, scorer: scorer.name, treg: !!treg, notion: !!notion, hubspot: !!hubspot, profile: profile?.company ?? null })
   }
 
   // Test recordings, for the app's ?fixture= dev mode.
@@ -254,9 +259,9 @@ const server = createServer(async (req, res) => {
       const saveId = typeof body.saveId === 'string' ? body.saveId : null
       const landed = saveId ? readLeads().find(l => l.saves?.includes(saveId)) : null
       if (landed) {
-        return json(res, 200, { lead: landed, notion: notion ? (landed.notion ? 'saved' : 'failed') : 'off', notionError: null, again: (landed.meetings ?? 1) > 1, drafted: !!landed.followUp, resent: true })
+        return json(res, 200, { lead: landed, notion: notion ? (landed.notion ? 'saved' : 'failed') : 'off', notionError: null, hubspot: hubspot ? (landed.hubspot ? 'saved' : 'failed') : 'off', again: (landed.meetings ?? 1) > 1, drafted: !!landed.followUp, resent: true })
       }
-      // Met before: update that lead (and its Notion row) instead of adding one.
+      // Met before: update that lead (and its CRM record) instead of adding one.
       const before = findSame(readLeads(), { card: body.card, verification })
       const lead: Lead = {
         id: before?.id ?? crypto.randomUUID(),
@@ -266,6 +271,7 @@ const server = createServer(async (req, res) => {
         savedAt: new Date().toISOString(),
         followUp: null,
         notion: before?.notion ?? null,
+        hubspot: before?.hubspot ?? null,
         meetings: (before?.meetings ?? (before ? 1 : 0)) + 1,
         firstMet: before?.firstMet ?? before?.savedAt ?? undefined,
         saves: saveId ? [...(before?.saves ?? []), saveId] : before?.saves,
@@ -287,11 +293,20 @@ const server = createServer(async (req, res) => {
           return existing
         })
       }
+      let hubspotError: string | null = null
+      if (hubspot) {
+        const existing = lead.hubspot ?? null
+        lead.hubspot = await (existing ? hubspot.updateLead(existing.id, lead).then(() => existing) : hubspot.addLead(lead)).catch(err => {
+          console.error('hubspot save failed:', err)
+          hubspotError = (err as Error).message
+          return existing
+        })
+      }
       appendLead(lead)
       const t2 = performance.now()
-      const timings = { draft_ms: Math.round(t1 - t0), notion_ms: Math.round(t2 - t1), server_ms: Math.round(t2 - t0) }
-      console.log(`lead ${JSON.stringify(timings)} ${lead.card.name ?? '-'} notion=${lead.notion ? 'ok' : notion ? 'failed' : 'off'}`)
-      return json(res, 200, { lead, notion: notion ? (notionError ? 'failed' : 'saved') : 'off', notionError, again: !!before, drafted: !!lead.followUp, timings })
+      const timings = { draft_ms: Math.round(t1 - t0), crm_ms: Math.round(t2 - t1), server_ms: Math.round(t2 - t0) }
+      console.log(`lead ${JSON.stringify(timings)} ${lead.card.name ?? '-'} notion=${lead.notion ? 'ok' : notion ? 'failed' : 'off'} hubspot=${lead.hubspot ? 'ok' : hubspot ? 'failed' : 'off'}`)
+      return json(res, 200, { lead, notion: notion ? (notionError ? 'failed' : 'saved') : 'off', notionError, hubspot: hubspot ? (hubspotError ? 'failed' : 'saved') : 'off', hubspotError, again: !!before, drafted: !!lead.followUp, timings })
     } catch (err) {
       console.error('save lead failed:', err)
       return json(res, 500, { error: (err as Error).message })
@@ -300,7 +315,7 @@ const server = createServer(async (req, res) => {
 
   // POST /leads/contact {id, name}: ask for a different buyer at their company
   // (one of the people the role check found), or no one (name null). The
-  // follow-up is redrafted and the Notion row updated.
+  // follow-up is redrafted and the CRM record updated.
   if (req.method === 'POST' && req.url === '/leads/contact') {
     try {
       const body = JSON.parse((await readBody(req, 5_000)).toString() || '{}') as { id?: string; name?: string | null }
@@ -310,14 +325,18 @@ const server = createServer(async (req, res) => {
       if (body.name && !pick) return json(res, 400, { error: 'not one of the buyers found' })
       lead.verification = { ...lead.verification, contact: pick ?? null }
       if (OPENAI_API_KEY) lead.followUp = await draftFollowUp(OPENAI_API_KEY, lead, profile).catch(() => lead.followUp)
-      let notionError: string | null = null
+      let crmError: string | null = null
       if (notion && lead.notion) await notion.switchContact(lead.notion.id, lead).catch(err => {
         console.error('notion update failed:', err)
-        notionError = (err as Error).message
+        crmError = (err as Error).message
+      })
+      if (hubspot && lead.hubspot) await hubspot.switchContact(lead.hubspot.id, lead).catch(err => {
+        console.error('hubspot update failed:', err)
+        crmError = (err as Error).message
       })
       appendLead(lead)
       console.log(`lead ${lead.card.name ?? '-'}: ask for ${pick?.name ?? 'no one'}`)
-      return json(res, 200, { lead, notionError })
+      return json(res, 200, { lead, crmError })
     } catch (err) {
       console.error('switch contact failed:', err)
       return json(res, 500, { error: (err as Error).message })
@@ -325,20 +344,25 @@ const server = createServer(async (req, res) => {
   }
 
   // POST /leads/remove {id}: forget a lead (a mis-hear or a test), and move
-  // its Notion row to the trash.
+  // its CRM record to the trash (Notion) or recycling bin (HubSpot).
   if (req.method === 'POST' && req.url === '/leads/remove') {
     try {
       const body = JSON.parse((await readBody(req, 2_000)).toString() || '{}') as { id?: string }
       const lead = readLeads().find(l => l.id === body.id)
       if (!lead) return json(res, 404, { error: 'no such lead' })
-      let notionError: string | null = null
+      let crmError: string | null = null
       if (notion && lead.notion) await notion.trash(lead.notion.id).catch(err => {
         console.error('notion trash failed:', err)
-        notionError = (err as Error).message
+        crmError = (err as Error).message
+      })
+      if (hubspot && lead.hubspot) await hubspot.trash(lead.hubspot.id).catch(err => {
+        console.error('hubspot delete failed:', err)
+        crmError = (err as Error).message
       })
       removeLead(lead.id)
-      console.log(`lead ${lead.card.name ?? '-'} removed${lead.notion ? (notionError ? ' (Notion row kept)' : ' and its Notion row trashed') : ''}`)
-      return json(res, 200, { ok: true, notionError })
+      const crm = lead.hubspot ? 'HubSpot contact' : lead.notion ? 'Notion row' : null
+      console.log(`lead ${lead.card.name ?? '-'} removed${crm ? (crmError ? ` (${crm} kept)` : ` and its ${crm} deleted`) : ''}`)
+      return json(res, 200, { ok: true, crmError })
     } catch (err) {
       console.error('remove lead failed:', err)
       return json(res, 500, { error: (err as Error).message })
@@ -350,6 +374,6 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(
-    `Handshake backend on :${PORT} · STT: ${transcriber.name} · scorer: ${scorer.name} · Treg: ${treg ? 'on' : 'off'} · Notion: ${notion ? 'on' : 'off'} · profile: ${profile?.company ?? 'none (using icp.md)'}`,
+    `Handshake backend on :${PORT} · STT: ${transcriber.name} · scorer: ${scorer.name} · Treg: ${treg ? 'on' : 'off'} · CRM: ${hubspot ? 'HubSpot' : notion ? 'Notion' : 'off'} · profile: ${profile?.company ?? 'none (using icp.md)'}`,
   )
 })

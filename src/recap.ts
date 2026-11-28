@@ -14,6 +14,7 @@ interface Lead {
   savedAt: string
   followUp: { subject: string; body: string } | null
   notion: { id: string; url: string } | null
+  hubspot?: { id: string; url: string | null } | null
   meetings?: number
 }
 
@@ -127,7 +128,7 @@ function leadHTML(l: Lead, fresh: boolean) {
           : ''
       }
       <div class="block"><h3>What they said</h3><p class="quote">“${esc(l.transcript)}”</p></div>
-      <div class="meta"><span>Met ${time}${again}</span><span class="links"><button type="button" class="remove" data-remove="${esc(l.id)}">Remove</button>${l.notion ? `<a href="${esc(l.notion.url)}" target="_blank" rel="noopener">Open in Notion ↗</a>` : ''}</span></div>
+      <div class="meta"><span>Met ${time}${again}</span><span class="links"><button type="button" class="remove" data-remove="${esc(l.id)}">Remove</button>${l.notion ? `<a href="${esc(l.notion.url)}" target="_blank" rel="noopener">Open in Notion ↗</a>` : ''}${l.hubspot?.url ? `<a href="${esc(l.hubspot.url)}" target="_blank" rel="noopener">Open in HubSpot ↗</a>` : ''}</span></div>
     </div>
   </article>`
 }
@@ -266,7 +267,7 @@ async function refresh() {
   } catch {
     return // the setup section already reports an unreachable backend
   }
-  const key = JSON.stringify(next.map(l => [l.id, !!l.notion, l.followUp?.body ?? null, l.verification?.contact?.name ?? null]))
+  const key = JSON.stringify(next.map(l => [l.id, !!l.notion, !!l.hubspot, l.followUp?.body ?? null, l.verification?.contact?.name ?? null]))
   if (key === shown) return // nothing changed: don't redraw under the reader
   shown = key
   // The lead first appears before its email and Notion row are ready, so the

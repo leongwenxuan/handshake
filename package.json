@@ -13,7 +13,8 @@
     "whisper": "whisper-server -m backend/models/ggml-base.en.bin --port 8178 -nt",
     "bench": "node backend/scripts/bench.ts",
     "fixtures": "sh backend/scripts/make-fixtures.sh",
-    "test:listen": "node scripts/test-listen.ts"
+    "test:listen": "node scripts/test-listen.ts",
+    "test:hubspot": "node backend/scripts/test-hubspot.ts"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.16"

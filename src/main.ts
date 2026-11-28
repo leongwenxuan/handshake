@@ -205,7 +205,7 @@ function showLive(shown: CardState) {
 }
 
 // Saves on the glasses first, so a lead is never lost, then sends it to the
-// backend, which drafts a follow-up email and adds both to Notion. The home
+// backend, which drafts a follow-up email and adds both to the CRM. The home
 // screen shows at once and its first line updates when that finishes. A
 // Save tapped while the role check runs waits for it before sending. If the
 // send fails (venue wifi), the lead stays marked unsent and is sent again
@@ -223,7 +223,7 @@ async function saveLead(shown: CardState) {
 
   const who = result.card.name ?? 'lead'
   await goIdle(`Saved ${who}. Syncing...`)
-  announce({ kind: 'busy', text: `Saving ${who} to Notion...` })
+  announce({ kind: 'busy', text: `Saving ${who}...` })
   const idle = state
   if (FIXTURE) await bridge.audioControl(true) // keep the simulator awake (see above)
   let line = `Saved ${who}.`
@@ -255,9 +255,11 @@ async function saveLead(shown: CardState) {
 }
 
 function resultLine(name: string, saved: SaveResult) {
-  if (saved.notion === 'saved' && saved.again) return `Met ${name} again: Notion updated.${saved.drafted ? '\nNew follow-up drafted.' : ''}`
-  if (saved.notion === 'saved') return `Saved ${name} to Notion.${saved.drafted ? '\nFollow-up email drafted.' : ''}`
-  if (saved.notion === 'failed') return `Saved ${name}. Notion failed.`
+  // The backend uses one CRM: HubSpot when it has a token, otherwise Notion.
+  const [crm, status] = saved.hubspot && saved.hubspot !== 'off' ? ['HubSpot', saved.hubspot] : ['Notion', saved.notion]
+  if (status === 'saved' && saved.again) return `Met ${name} again: ${crm} updated.${saved.drafted ? '\nNew follow-up drafted.' : ''}`
+  if (status === 'saved') return `Saved ${name} to ${crm}.${saved.drafted ? '\nFollow-up email drafted.' : ''}`
+  if (status === 'failed') return `Saved ${name}. ${crm} failed.`
   if (saved.drafted) return `Saved ${name}. Follow-up email drafted.`
   return `Saved ${name}.`
 }

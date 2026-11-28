@@ -107,6 +107,7 @@ export async function verify(transcript: string, card: Card): Promise<VerifyResu
 export interface SaveResult {
   notion: 'saved' | 'failed' | 'off'
   notionError: string | null
+  hubspot?: 'saved' | 'failed' | 'off' // HubSpot is the CRM when the backend has a HubSpot token
   drafted: boolean
   again: boolean // met before: the existing lead was updated
   resent?: boolean // it had landed already, from an earlier try
